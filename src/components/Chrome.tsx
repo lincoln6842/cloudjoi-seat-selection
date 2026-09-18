@@ -85,7 +85,7 @@ export function BottomBar({ onReview }: { onReview: () => void }) {
         </div>
       </div>
       <button className="button button--primary" onClick={onReview} disabled={selection.seats.length === 0}>
-        Review Order ({count}) →
+        Review →
       </button>
     </div>
   )

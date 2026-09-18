@@ -141,7 +141,7 @@ The dev backend (`mock/`) is a Vite plugin implementing that contract over **rea
 ### Mobile first
 
 - **Phones and tablets** (below 1024 px, where tablets get the mobile layout centred with side margins) get the same two levels as desktop, landing on a section's front rows at finger size (see above). Zoomed out inside a section, a touch tap zooms in rather than selects; a mouse click selects.
-- **Selection** is a bottom bar (timer, count, subtotal, "Review Order") plus a native `<dialog>` sheet with the same `SelectionPanel` the desktop sidebar uses. Using `<dialog>` gives focus trapping, Esc and the backdrop for free.
+- **Selection** is a bottom bar (timer, count, subtotal, "Review") plus a native `<dialog>` sheet with the same `SelectionPanel` the desktop sidebar uses. Using `<dialog>` gives focus trapping, Esc and the backdrop for free.
 - **Desktop** shows a hover tooltip (section, row, seat, price, status), and a pointer cursor over enterable section blocks.
 
 ### Other notes
