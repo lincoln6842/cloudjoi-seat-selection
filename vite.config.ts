@@ -16,6 +16,7 @@ export default defineConfig(({ mode }) => {
         fakeApi({
           reverbAppKey: env.VITE_REVERB_APP_KEY,
           bots: env.MOCK_BOTS !== 'off',
+          revoke: env.MOCK_REVOKE === 'on',
           latency: Number(env.MOCK_LATENCY ?? 250),
           holdSeconds: Number(env.MOCK_HOLD_SECONDS) || undefined,
         }),

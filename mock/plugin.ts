@@ -13,6 +13,8 @@ interface Options {
   bots: boolean
   /** Max random response delay in ms, so pending states are visible. MOCK_LATENCY=0 to disable. */
   latency: number
+  /** The venue revokes a random held seat now and then (MOCK_REVOKE=on). Off by default: it keeps taking your seats. */
+  revoke: boolean
   /** Hold expiry override (MOCK_HOLD_SECONDS=30) to see the expiry flow without waiting 5 minutes. */
   holdSeconds?: number
 }
@@ -46,8 +48,7 @@ export function fakeApi(options: Options): Plugin {
       const timers = [
         setInterval(() => venue.sweep(), 1_000),
         options.bots && setInterval(() => venue.botTick(), 800),
-        // Now and then the venue revokes someone's seat, so the "lost seat" flow shows up.
-        options.bots && setInterval(() => Math.random() < 0.5 && venue.revoke(), 60_000),
+        options.revoke && setInterval(() => Math.random() < 0.5 && venue.revoke(), 60_000),
       ]
       httpServer.on('close', () => {
         timers.forEach((t) => t && clearInterval(t))
