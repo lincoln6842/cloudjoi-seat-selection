@@ -22,12 +22,25 @@ export function lodFor(scale: number, seatSize: number): Lod {
   return cell < CLOSE_FROM_PX ? 'mid' : 'close'
 }
 
-export function fitTo(bounds: Schemas['Rect'], width: number, height: number, padding = 16): Viewport {
-  const scale = Math.min((width - 2 * padding) / bounds.width, (height - 2 * padding) / bounds.height)
+/** Screen space kept free for overlays (zoom buttons, legend, hints). */
+export interface Insets {
+  top: number
+  right: number
+  bottom: number
+  left: number
+}
+
+export const NO_INSETS: Insets = { top: 16, right: 16, bottom: 16, left: 16 }
+
+/** Whole venue inside the screen minus `insets`, centred in that area. */
+export function fitTo(bounds: Schemas['Rect'], width: number, height: number, insets: Insets = NO_INSETS): Viewport {
+  const w = width - insets.left - insets.right
+  const h = height - insets.top - insets.bottom
+  const scale = Math.min(w / bounds.width, h / bounds.height)
   return {
     scale,
-    x: (width - bounds.width * scale) / 2 - bounds.x * scale,
-    y: (height - bounds.height * scale) / 2 - bounds.y * scale,
+    x: insets.left + (w - bounds.width * scale) / 2 - bounds.x * scale,
+    y: insets.top + (h - bounds.height * scale) / 2 - bounds.y * scale,
   }
 }
 

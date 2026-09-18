@@ -54,7 +54,7 @@ describe('seat hit testing', () => {
 
 describe('viewport', () => {
   it('fits the venue and centres it', () => {
-    const vp = fitTo(seatmap.bounds, 220, 100, 10)
+    const vp = fitTo(seatmap.bounds, 220, 100, { top: 10, right: 10, bottom: 10, left: 10 })
     expect(vp.scale).toBe(2)
     expect(toWorld(vp, 110, 50)).toEqual([50, 20])
   })
