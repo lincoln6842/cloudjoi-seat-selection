@@ -1,4 +1,5 @@
 import type { Schemas } from '../api/client'
+import type { VenueModel } from '../seatmap/model'
 
 export type HoldStatus = 'pending' | 'held' | 'revoked'
 export type SeatStatus = 'available' | 'selected' | 'pending' | 'unavailable' | 'lost'
@@ -13,6 +14,8 @@ export interface Notice {
 
 export interface SeatState {
   phase: 'loading' | 'ready' | 'error'
+  /** Static venue layout, loaded once. */
+  venue: VenueModel | null
   /** Last applied availability seq; broadcasts must follow it by exactly 1. */
   seq: number
   /** Public availability: held by anyone (including me) or sold. */
@@ -30,6 +33,7 @@ export interface SeatState {
 
 export const initialState: SeatState = {
   phase: 'loading',
+  venue: null,
   seq: 0,
   unavailable: new Set(),
   holds: new Map(),

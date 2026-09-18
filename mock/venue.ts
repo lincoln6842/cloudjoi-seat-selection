@@ -26,6 +26,8 @@ interface Session {
 }
 
 export interface VenueOptions {
+  /** Defaults to HOLD_TTL_MS; shortened in dev to demo expiry. */
+  holdTtlMs?: number
   now: () => number
   random: () => number
   broadcast: (payload: Schemas['SeatsChanged']) => void
@@ -99,7 +101,7 @@ export class FakeVenue {
       throw new ApiError(409, 'HOLD_LIMIT_REACHED', `Maximum ${MAX_SEATS} seats per order.`)
     }
     session.holds.set(seatId, 'held')
-    session.expiresAt ??= this.opts.now() + HOLD_TTL_MS
+    session.expiresAt ??= this.opts.now() + (this.opts.holdTtlMs ?? HOLD_TTL_MS)
     this.unavailable.add(seatId)
     this.commit([{ seat_id: seatId, status: 'unavailable' }])
     return true

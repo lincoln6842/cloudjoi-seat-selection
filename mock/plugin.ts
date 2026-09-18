@@ -13,6 +13,8 @@ interface Options {
   bots: boolean
   /** Max random response delay in ms, so pending states are visible. MOCK_LATENCY=0 to disable. */
   latency: number
+  /** Hold expiry override (MOCK_HOLD_SECONDS=30) to see the expiry flow without waiting 5 minutes. */
+  holdSeconds?: number
 }
 
 const readJson = <T>(file: string): T => JSON.parse(readFileSync(new URL(file, import.meta.url), 'utf8'))
@@ -35,6 +37,7 @@ export function fakeApi(options: Options): Plugin {
       const channel = `events.${seatmap.event.id}.seats`
       const reverb = createFakeReverb(httpServer as Server, options.reverbAppKey)
       const venue = new FakeVenue(seatmap, unavailable, {
+        holdTtlMs: options.holdSeconds && options.holdSeconds * 1000,
         now: Date.now,
         random: Math.random,
         broadcast: (payload) => reverb.broadcast(channel, 'seats.changed', payload),

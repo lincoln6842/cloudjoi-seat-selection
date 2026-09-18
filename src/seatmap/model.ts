@@ -23,6 +23,10 @@ export interface SectionInfo {
   front: Point
   /** Where to draw the section label. */
   centre: Point
+  /** Just above the front row at the section's centre: where its title goes at mid zoom. */
+  titleAt: Point
+  /** First and last seat of each row, for row labels. */
+  rows: { label: string; first: SeatInfo; last: SeatInfo }[]
 }
 
 export interface VenueModel {
@@ -52,17 +56,20 @@ export function buildModel(seatmap: Seatmap): VenueModel {
       name: s.name,
       shortName: s.short_name,
       tier,
-      outline: s.outline,
+      outline: s.outline.map(([x, y]) => [x, y] as Point),
       seatIds: [],
       front: [(front[0].x + front[front.length - 1].x) / 2, front[0].y],
       centre: [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2],
+      titleAt: [0, 0],
+      rows: [],
     }
     for (const row of s.rows) {
-      for (const seat of row.seats) {
-        seats.push({ id: seat.id, number: seat.number, row: row.label, x: seat.x, y: seat.y, section })
-        section.seatIds.push(seat.id)
-      }
+      const rowSeats = row.seats.map((seat) => ({ ...seat, row: row.label, section }))
+      seats.push(...rowSeats)
+      section.seatIds.push(...rowSeats.map((seat) => seat.id))
+      if (rowSeats.length > 0) section.rows.push({ label: row.label, first: rowSeats[0], last: rowSeats[rowSeats.length - 1] })
     }
+    section.titleAt = [section.centre[0], Math.min(...front.map((seat) => seat.y)) - seatmap.seat_size * 0.9]
     sections.push(section)
   }
 
@@ -108,4 +115,9 @@ function insidePolygon(polygon: Point[], x: number, y: number): boolean {
     if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside
   }
   return inside
+}
+
+export function seatLabel(model: VenueModel, seatId: string): string {
+  const seat = model.byId.get(seatId)
+  return seat ? `${seat.section.name} · Row ${seat.row}, Seat ${seat.number}` : seatId
 }

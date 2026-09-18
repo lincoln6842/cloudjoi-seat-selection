@@ -14,7 +14,9 @@
     "seatmap": "node scripts/generate-seatmap.ts"
   },
   "dependencies": {
+    "laravel-echo": "^2.5.0",
     "openapi-fetch": "^0.17.0",
+    "pusher-js": "^8.6.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

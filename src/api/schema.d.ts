@@ -202,10 +202,8 @@ export interface components {
             x: number;
             y: number;
         };
-        Point: [
-            number,
-            number
-        ];
+        /** @description [x, y] in layout units. */
+        Point: number[];
         Rect: {
             x: number;
             y: number;
