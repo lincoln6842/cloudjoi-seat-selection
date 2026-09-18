@@ -1,0 +1,520 @@
+openapi: 3.1.0
+info:
+  title: CloudJoi Seat Selection API
+  version: 0.1.0
+  description: |
+    Contract between the seat-selection SPA and the backend (Laravel).
+    The Vite dev server's fake API implements this same contract.
+
+    ## Conventions
+    - Money is an integer in minor units (sen): `15000` = RM 150.00.
+      The currency is set once per event (`event.currency`).
+    - Timestamps are RFC 3339 UTC. Responses that drive a countdown also
+      carry `server_time` so clients can correct for device clock skew.
+    - Seat ids are opaque strings, stable for the lifetime of the seatmap.
+    - Errors use the `Error` schema. Clients branch on `error.code`, never
+      on `error.message`.
+
+    ## Holds
+    Clicking a seat holds it server-side. All of a session's holds for an
+    event share **one expiry**, set 5 minutes after the first seat is
+    held. Holding more seats does not extend it.
+    When it passes, every hold is released at once.
+
+    A hold can also be **revoked** before expiry (e.g. the venue takes the
+    seat back). A revoked hold stays in the hold set with
+    `status: revoked` until the client removes it, so the user is always
+    told which seat was lost, even after a reload.
+
+    ## Live updates
+    See `x-realtime` at the bottom of this file. Clients load a snapshot
+    via `GET /availability`, then apply pushed deltas. The `seq` counter
+    lets a client detect a missed delta and resync with `?since=`.
+  x-realtime:
+    transport: Laravel Reverb (Pusher protocol) via laravel-echo
+    channel: "events.{eventId}.seats"
+    visibility: public
+    event: seats.changed
+    payload:
+      $ref: "#/components/schemas/SeatsChanged"
+    rules:
+      - "`seq` increases by exactly 1 per broadcast, per event."
+      - "If a received `seq` is not `lastSeq + 1`, the client calls
+        GET /events/{eventId}/availability?since={lastSeq} and applies
+        the result before processing further broadcasts."
+      - "Any server-side change to a seat's hold (held, released, expired,
+        revoked, sold) is broadcast for that seat, even when its public
+        status did not change. A change touching one of the client's own
+        held seats is the client's cue to refetch GET /holds."
+      - "Broadcasts are sent after the database transaction commits."
+
+servers:
+  - url: /api
+
+security:
+  - sessionToken: []
+
+paths:
+  /sessions:
+    post:
+      operationId: createSession
+      summary: Start an anonymous buyer session
+      description: |
+        Returns a token the client stores (localStorage) and sends as
+        `Authorization: Bearer <token>`. Holds belong to the session, so
+        a reload with the same token restores the user's selection.
+      security: []
+      responses:
+        "201":
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+
+  /events/{eventId}/seatmap:
+    get:
+      operationId: getSeatmap
+      summary: Venue layout, sections, prices
+      description: |
+        Static layout. Changes rarely; cacheable (ETag). Contains no
+        availability. That comes from /availability.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/EventId"
+      responses:
+        "200":
+          description: Seatmap
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Seatmap"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /events/{eventId}/availability:
+    get:
+      operationId: getAvailability
+      summary: Which seats are unavailable, as a snapshot or a delta
+      description: |
+        Without `since`: a full snapshot.
+        With `since`: the changes after that `seq`. If the server no
+        longer has history that far back, it returns a snapshot instead;
+        clients must handle both `type`s on every call.
+
+        "Unavailable" covers held by anyone (including the caller) and
+        sold. Clients overlay their own holds from GET /holds.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/EventId"
+        - name: since
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          description: Snapshot or delta
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/AvailabilitySnapshot"
+                  - $ref: "#/components/schemas/AvailabilityDelta"
+                discriminator:
+                  propertyName: type
+                  mapping:
+                    snapshot: "#/components/schemas/AvailabilitySnapshot"
+                    delta: "#/components/schemas/AvailabilityDelta"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /events/{eventId}/holds:
+    get:
+      operationId: getHolds
+      summary: The caller's current holds for this event
+      parameters:
+        - $ref: "#/components/parameters/EventId"
+      responses:
+        "200":
+          $ref: "#/components/responses/HoldSet"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: holdSeat
+      summary: Hold one seat
+      description: |
+        Atomic: of any number of concurrent requests for the same seat,
+        exactly one succeeds. Idempotent for the caller: holding a seat
+        the caller already holds returns 200 with the unchanged set.
+      parameters:
+        - $ref: "#/components/parameters/EventId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [seat_id]
+              properties:
+                seat_id:
+                  type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/HoldSet"
+        "201":
+          $ref: "#/components/responses/HoldSet"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |
+            `SEAT_UNAVAILABLE`: someone else holds or bought it.
+            `HOLD_LIMIT_REACHED`: the caller already has `max_seats` holds.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                taken:
+                  value:
+                    error: { code: SEAT_UNAVAILABLE, message: Seat was just taken. }
+                limit:
+                  value:
+                    error: { code: HOLD_LIMIT_REACHED, message: Maximum 10 seats per order. }
+
+  /events/{eventId}/holds/{seatId}:
+    delete:
+      operationId: releaseSeat
+      summary: Release (or dismiss a revoked) hold
+      description: |
+        Idempotent: releasing a seat the caller does not hold returns 200
+        with the unchanged set. Also used to dismiss a `revoked` hold.
+      parameters:
+        - $ref: "#/components/parameters/EventId"
+        - name: seatId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/HoldSet"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /events/{eventId}/checkout:
+    post:
+      operationId: checkout
+      summary: Turn the caller's holds into an order (stub)
+      description: |
+        Placeholder for the payment flow, which is out of scope. Rejects
+        the request if any hold is revoked or the hold set has expired.
+      parameters:
+        - $ref: "#/components/parameters/EventId"
+      responses:
+        "201":
+          description: Order created, awaiting payment
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [order_id]
+                properties:
+                  order_id:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: |
+            `HOLDS_INVALID`: nothing held, a hold is revoked, or holds expired.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+components:
+  securitySchemes:
+    sessionToken:
+      type: http
+      scheme: bearer
+      description: Token from POST /sessions.
+
+  parameters:
+    EventId:
+      name: eventId
+      in: path
+      required: true
+      schema:
+        type: string
+
+  responses:
+    HoldSet:
+      description: The caller's full hold set after the operation
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/HoldSet"
+    NotFound:
+      description: Event (or seat) not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Missing, unknown or expired session token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Session:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+
+    Seatmap:
+      type: object
+      required: [event, seat_size, bounds, stage, tiers, sections]
+      properties:
+        event:
+          $ref: "#/components/schemas/Event"
+        seat_size:
+          type: number
+          description: Seat cell size in layout units; seat x/y are cell centres.
+        bounds:
+          $ref: "#/components/schemas/Rect"
+        stage:
+          $ref: "#/components/schemas/Rect"
+        tiers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tier"
+        sections:
+          type: array
+          items:
+            $ref: "#/components/schemas/Section"
+
+    Event:
+      type: object
+      required: [id, name, venue, starts_at, currency]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        venue:
+          type: string
+        starts_at:
+          type: string
+          format: date-time
+        currency:
+          type: string
+          description: ISO 4217, e.g. MYR
+          example: MYR
+
+    Tier:
+      type: object
+      description: A price level. Several sections can share one tier.
+      required: [id, name, price]
+      properties:
+        id:
+          type: string
+          example: orch-centre
+        name:
+          type: string
+          example: Orchestra Centre
+        price:
+          type: integer
+          description: Minor units
+          example: 15000
+
+    Section:
+      type: object
+      required: [id, name, short_name, tier_id, outline, rows]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          example: Orchestra Centre
+        short_name:
+          type: string
+          example: Orchestra C
+        tier_id:
+          type: string
+        outline:
+          type: array
+          description: Closed polygon in layout units, drawn at overview zoom.
+          minItems: 3
+          items:
+            $ref: "#/components/schemas/Point"
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/Row"
+
+    Row:
+      type: object
+      required: [label, seats]
+      properties:
+        label:
+          type: string
+          example: G
+        seats:
+          type: array
+          items:
+            $ref: "#/components/schemas/Seat"
+
+    Seat:
+      type: object
+      required: [id, number, x, y]
+      properties:
+        id:
+          type: string
+          example: OC-G-14
+        number:
+          type: string
+          description: Display label, e.g. "14"
+        x:
+          type: number
+        y:
+          type: number
+
+    Point:
+      type: array
+      prefixItems:
+        - type: number
+        - type: number
+      minItems: 2
+      maxItems: 2
+
+    Rect:
+      type: object
+      required: [x, y, width, height]
+      properties:
+        x: { type: number }
+        y: { type: number }
+        width: { type: number }
+        height: { type: number }
+
+    SeatStatus:
+      type: string
+      enum: [available, unavailable]
+
+    SeatChange:
+      type: object
+      required: [seat_id, status]
+      properties:
+        seat_id:
+          type: string
+        status:
+          $ref: "#/components/schemas/SeatStatus"
+
+    AvailabilitySnapshot:
+      type: object
+      required: [type, seq, server_time, unavailable]
+      properties:
+        type:
+          type: string
+          const: snapshot
+        seq:
+          type: integer
+        server_time:
+          type: string
+          format: date-time
+        unavailable:
+          type: array
+          description: Every seat that is not available. All others are available.
+          items:
+            type: string
+
+    AvailabilityDelta:
+      type: object
+      required: [type, seq, server_time, changes]
+      properties:
+        type:
+          type: string
+          const: delta
+        seq:
+          type: integer
+          description: The seq after applying `changes`.
+        server_time:
+          type: string
+          format: date-time
+        changes:
+          type: array
+          description: Net changes since `since`, one entry per seat.
+          items:
+            $ref: "#/components/schemas/SeatChange"
+
+    SeatsChanged:
+      type: object
+      description: Reverb broadcast payload (see x-realtime).
+      required: [seq, changes]
+      properties:
+        seq:
+          type: integer
+        changes:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeatChange"
+
+    Hold:
+      type: object
+      required: [seat_id, status]
+      properties:
+        seat_id:
+          type: string
+        status:
+          type: string
+          enum: [held, revoked]
+
+    HoldSet:
+      type: object
+      required: [holds, expires_at, server_time, max_seats]
+      properties:
+        holds:
+          type: array
+          description: In the order the seats were held.
+          items:
+            $ref: "#/components/schemas/Hold"
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+          description: Shared expiry of every hold. Null when nothing is held.
+        server_time:
+          type: string
+          format: date-time
+        max_seats:
+          type: integer
+          example: 10
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - SEAT_UNAVAILABLE
+                - HOLD_LIMIT_REACHED
+                - HOLDS_INVALID
+                - UNAUTHENTICATED
+                - NOT_FOUND
+                - VALIDATION_FAILED
+            message:
+              type: string
