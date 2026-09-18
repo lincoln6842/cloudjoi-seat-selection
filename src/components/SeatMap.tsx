@@ -12,6 +12,8 @@ import { useStore } from '../state/store'
 // Space the overlays take, so "fit" keeps the venue clear of them (see .map__zoom/.legend CSS).
 const DESKTOP_INSETS: Insets = { top: 60, right: 16, bottom: 84, left: 76 }
 const MOBILE_INSETS: Insets = { top: 56, right: 12, bottom: 176, left: 12 }
+// Phone overview: no legend (every block already shows its price), so the venue gets the height.
+const MOBILE_OVERVIEW_INSETS: Insets = { ...MOBILE_INSETS, bottom: 16 }
 
 /** What other UI (e.g. "Choose seats again") may ask of the map. */
 export interface SeatMapHandle {
@@ -27,8 +29,10 @@ export function SeatMap({ venue, ref }: { venue: VenueModel; ref?: Ref<SeatMapHa
   const [zone, setZone] = useState<SectionInfo | null>(null)
   const [edge, setEdge] = useState<Edge | null>(null)
   const [tip, setTip] = useState<{ seat: SeatInfo; x: number; y: number } | null>(null)
-  const insets = useMediaQuery(DESKTOP) ? DESKTOP_INSETS : MOBILE_INSETS
-  const initialInsets = useRef(insets)
+  const desktop = useMediaQuery(DESKTOP)
+  const insets = desktop ? DESKTOP_INSETS : MOBILE_INSETS
+  const overviewInsets = desktop ? DESKTOP_INSETS : MOBILE_OVERVIEW_INSETS
+  const initialInsets = useRef([insets, overviewInsets] as const)
 
   useEffect(() => {
     const instance = new SeatMapRenderer(canvasRef.current!, venue, seatStore, {
@@ -36,7 +40,7 @@ export function SeatMap({ venue, ref }: { venue: VenueModel; ref?: Ref<SeatMapHa
       onHover: (seat, x, y) => setTip(seat ? { seat, x, y } : null),
       onZoneChange: setZone,
       onEdge: setEdge,
-    }, initialInsets.current)
+    }, ...initialInsets.current)
     renderer.current = instance
     return () => {
       instance.destroy()
@@ -44,7 +48,7 @@ export function SeatMap({ venue, ref }: { venue: VenueModel; ref?: Ref<SeatMapHa
     }
   }, [venue])
 
-  useEffect(() => renderer.current?.setInsets(insets), [insets])
+  useEffect(() => renderer.current?.setInsets(insets, overviewInsets), [insets, overviewInsets])
 
   useEffect(() => {
     if (!edge) return
@@ -96,7 +100,7 @@ export function SeatMap({ venue, ref }: { venue: VenueModel; ref?: Ref<SeatMapHa
           </button>
         </div>
       )}
-      <Legend venue={venue} showStates={zone !== null} />
+      {(desktop || zone) && <Legend venue={venue} showStates={zone !== null} />}
       {tip && <SeatTooltip {...tip} currency={venue.seatmap.event.currency} />}
       {import.meta.env.DEV && (
         <button className="map__dev" onClick={() => void devRevokeSeat()} title="Dev only: the fake venue revokes one of your seats">

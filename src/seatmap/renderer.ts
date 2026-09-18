@@ -77,10 +77,20 @@ export class SeatMapRenderer {
   private readonly store: Store<SeatState>
   private readonly callbacks: RendererCallbacks
   private insets: Insets
+  /** The whole-venue view may use more of the screen (e.g. no legend over it on a phone). */
+  private overviewInsets: Insets
 
-  constructor(canvas: HTMLCanvasElement, model: VenueModel, store: Store<SeatState>, callbacks: RendererCallbacks, insets: Insets) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    model: VenueModel,
+    store: Store<SeatState>,
+    callbacks: RendererCallbacks,
+    insets: Insets,
+    overviewInsets = insets,
+  ) {
     this.canvas = canvas
     this.insets = insets
+    this.overviewInsets = overviewInsets
     this.model = model
     this.store = store
     this.callbacks = callbacks
@@ -121,8 +131,9 @@ export class SeatMapRenderer {
     this.animateTo(zoomAt(this.vp, 1 / 1.6, this.width / 2, this.height / 2, this.limits()))
   }
 
-  setInsets(insets: Insets): void {
+  setInsets(insets: Insets, overviewInsets = insets): void {
     this.insets = insets
+    this.overviewInsets = overviewInsets
     this.resize()
   }
 
@@ -133,6 +144,8 @@ export class SeatMapRenderer {
 
   /** Level 2: zoom into one section; other sections blur out. */
   enterZone(section: SectionInfo): void {
+    // The go-to pill outlives its offer; the section may have sold out since.
+    if (!this.isOpen(section)) return this.setEdge(null)
     this.zone = section
     this.setEdge(null)
     this.callbacks.onZoneChange(section)
@@ -170,7 +183,7 @@ export class SeatMapRenderer {
     this.dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR)
     this.canvas.width = Math.round(rect.width * this.dpr)
     this.canvas.height = Math.round(rect.height * this.dpr)
-    this.fitVp = fitTo(this.model.seatmap.bounds, this.width, this.height, this.insets)
+    this.fitVp = fitTo(this.model.seatmap.bounds, this.width, this.height, this.overviewInsets)
     this.setViewport(this.zone ? this.vp : this.fitVp)
   }
 
@@ -245,6 +258,7 @@ export class SeatMapRenderer {
       }
       this.previousUnavailable = unavailable
       this.countSectionsLeft()
+      if (this.edge && !this.isOpen(this.edge.section)) this.setEdge(null)
     }
     this.invalidate()
   }
@@ -438,37 +452,44 @@ export class SeatMapRenderer {
     const { ctx } = this
     const cx = this.sx(section.centre[0])
     const cy = this.sy(section.centre[1])
-    const xs = section.outline.map((p) => p[0])
-    const widthPx = (Math.max(...xs) - Math.min(...xs)) * this.vp.scale
-    const size = Math.max(9, Math.min(14, widthPx / 11))
+    const widthPx = section.bounds.width * this.vp.scale
     if (widthPx < 60) return
     const soldOut = left === 0
     const price = formatMoney(section.tier.price, this.model.seatmap.event.currency, true)
+    const name = section.shortName.toUpperCase()
+
+    // Stack: name/price box, gap, chip = 5.1 × size tall; keep it within the block.
+    const fit = Math.min(15, widthPx / 9, (section.labelHeight * this.vp.scale * 0.8) / 5.1)
+    ctx.font = `700 ${fit}px ${fonts.sans}`
+    // Text width per px of font size, plus the box's side padding.
+    const perPx = Math.max(ctx.measureText(name).width, ctx.measureText(price).width) / fit + 1.6
+    const size = Math.min(fit, (widthPx * 0.82) / perPx)
+    if (size < 7) return
+    const boxW = size * perPx
+    const boxH = size * 3.2
+    const top = cy - (size * 5.1) / 2
 
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    ctx.font = `700 ${size}px ${fonts.sans}`
-    const name = section.shortName.toUpperCase()
-    const boxW = Math.max(ctx.measureText(name).width, ctx.measureText(price).width) + size * 1.6
-    const boxH = size * 3
     if (!soldOut) {
       ctx.fillStyle = colors.paper
-      roundedRect(ctx, cx - boxW / 2, cy - boxH / 2 - size * 0.6, boxW, boxH, 6)
+      roundedRect(ctx, cx - boxW / 2, top, boxW, boxH, 6)
       ctx.fill()
       ctx.lineWidth = 2
       ctx.strokeStyle = colors.ink
       ctx.stroke()
     }
     ctx.fillStyle = soldOut ? colors.soldOutText : colors.ink
-    ctx.fillText(name, cx, cy - size * 1.1)
+    ctx.font = `700 ${size}px ${fonts.sans}`
+    ctx.fillText(name, cx, top + size * 1.05)
     ctx.font = `700 ${size * 0.95}px ${fonts.mono}`
-    ctx.fillText(price, cx, cy + size * 0.2)
+    ctx.fillText(price, cx, top + size * 2.25)
 
     const chip = soldOut ? 'SOLD OUT' : left <= LOW_STOCK ? `Only ${left} left` : `${left} left`
     ctx.font = `700 ${size * 0.8}px ${fonts.sans}`
     const chipW = ctx.measureText(chip).width + size * 1.2
     const chipH = size * 1.5
-    const chipY = cy + boxH / 2 + size * 0.1
+    const chipY = top + boxH + size * 0.4
     ctx.fillStyle = soldOut ? colors.soldOutStroke : left <= LOW_STOCK ? colors.chipLow : colors.paper
     roundedRect(ctx, cx - chipW / 2, chipY, chipW, chipH, 4)
     ctx.fill()

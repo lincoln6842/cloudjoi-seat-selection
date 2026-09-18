@@ -23,8 +23,10 @@ export interface SectionInfo {
   seatIds: string[]
   /** Centre of the section's front row, where "tap a section" zooms to. */
   front: Point
-  /** Where to draw the section label. */
+  /** Where to draw the section label: midway down the outline at its middle x. */
   centre: Point
+  /** Outline height at `centre` (arcs make it shorter than the bounds). */
+  labelHeight: number
   /** Just above the front row at the section's centre: where its title goes at mid zoom. */
   titleAt: Point
   /** First and last seat of each row, for row labels. */
@@ -53,6 +55,8 @@ export function buildModel(seatmap: Seatmap): VenueModel {
     const front = s.rows[0].seats
     const xs = s.outline.map((p) => p[0])
     const ys = s.outline.map((p) => p[1])
+    const midX = (Math.min(...xs) + Math.max(...xs)) / 2
+    const [top, bottom] = verticalSpan(s.outline, midX)
     const section: SectionInfo = {
       id: s.id,
       name: s.name,
@@ -62,7 +66,8 @@ export function buildModel(seatmap: Seatmap): VenueModel {
       bounds: { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) },
       seatIds: [],
       front: [(front[0].x + front[front.length - 1].x) / 2, front[0].y],
-      centre: [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2],
+      centre: [midX, (top + bottom) / 2],
+      labelHeight: bottom - top,
       titleAt: [0, 0],
       rows: [],
     }
@@ -110,8 +115,9 @@ export function sectionAt(model: VenueModel, x: number, y: number): SectionInfo 
 }
 
 /**
- * The nearest section lying roughly in direction (dx, dy) of `from`, among
- * those `accept` allows. Straight ahead beats diagonal (score cos² / distance).
+ * The nearest section lying roughly in direction (dx, dy) of `from`, or null
+ * if `accept` rejects it: a closed neighbour is never skipped for one further
+ * away. Straight ahead beats diagonal (score cos² / distance).
  */
 export function sectionToward(
   model: VenueModel,
@@ -124,7 +130,7 @@ export function sectionToward(
   let bestScore = 0
   const length = Math.hypot(dx, dy)
   for (const s of model.sections) {
-    if (s === from || !accept(s)) continue
+    if (s === from) continue
     const vx = s.centre[0] - from.centre[0]
     const vy = s.centre[1] - from.centre[1]
     const distance = Math.hypot(vx, vy)
@@ -133,7 +139,21 @@ export function sectionToward(
     const score = (cos * cos) / distance
     if (score > bestScore) [best, bestScore] = [s, score]
   }
-  return best
+  return best && accept(best) ? best : null
+}
+
+/** Top and bottom where the vertical line at x crosses a polygon. */
+function verticalSpan(polygon: number[][], x: number): [number, number] {
+  let top = Infinity
+  let bottom = -Infinity
+  polygon.forEach(([x1, y1], i) => {
+    const [x2, y2] = polygon[(i + 1) % polygon.length]
+    if (x1 <= x === x2 <= x) return
+    const y = y1 + ((x - x1) / (x2 - x1)) * (y2 - y1)
+    top = Math.min(top, y)
+    bottom = Math.max(bottom, y)
+  })
+  return [top, bottom]
 }
 
 // Ray casting.

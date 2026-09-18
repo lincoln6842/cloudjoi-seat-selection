@@ -61,6 +61,14 @@ describe('seat hit testing', () => {
     expect(sectionToward(model, a, 0, 1, open)).toBeNull()
     expect(sectionToward(model, a, 1, 0, (s) => s !== b)).toBeNull()
   })
+
+  it('does not skip a closed neighbour for an open diagonal one', () => {
+    const [, b] = seatmap.sections
+    const c = { ...b, id: 'C', outline: b.outline.map(([x, y]) => [x, y + 30] as [number, number]), rows: b.rows.map((r) => ({ ...r, seats: r.seats.map((seat) => ({ ...seat, id: `C${seat.id}`, y: seat.y + 30 })) })) }
+    const withDiagonal = buildModel({ ...seatmap, sections: [...seatmap.sections, c] })
+    const [a] = withDiagonal.sections
+    expect(sectionToward(withDiagonal, a, 1, 0, (s) => s.id !== 'B')).toBeNull()
+  })
 })
 
 describe('viewport', () => {
