@@ -92,7 +92,8 @@ describe('FakeVenue', () => {
 
     venue.release(t, seats[0])
     expect(venue.holdSet(t).holds).toEqual([])
-    expect(venue.availability().type === 'snapshot' && venue.availability().unavailable).toContain(seats[0])
+    const snapshot = venue.availability()
+    expect(snapshot.type === 'snapshot' && snapshot.unavailable).toContain(seats[0])
   })
 
   it('rejects unknown sessions', () => {
