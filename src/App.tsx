@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { BottomBar, BottomSheet, ExpiredDialog, Header, LoadState } from './components/Chrome'
+import { BottomBar, BottomSheet, ConfirmationDialog, ExpiredDialog, Header, LoadState } from './components/Chrome'
 import { Notices } from './components/Notices'
 import { SeatMap, type SeatMapHandle } from './components/SeatMap'
 import { SelectionPanel } from './components/SelectionPanel'
@@ -34,6 +34,7 @@ export default function App() {
       )}
       {!desktop && <BottomSheet open={sheetOpen} onClose={() => setSheetOpen(false)} />}
       <ExpiredDialog onChooseAgain={() => map.current?.showAll()} />
+      <ConfirmationDialog onDone={() => map.current?.showAll()} />
     </div>
   )
 }

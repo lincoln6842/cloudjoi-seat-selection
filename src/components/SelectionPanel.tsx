@@ -14,6 +14,7 @@ import { WarningIcon } from './Notices'
 export function SelectionPanel({ onClose }: { onClose?: () => void }) {
   const selection = useSelection()
   const expiresAt = useStore(seatStore, (s) => s.expiresAt)
+  const checkingOut = useStore(seatStore, (s) => s.checkingOut)
   const blocker = checkoutBlocker(selection)
   const { seats, lost, currency } = selection
   const count = seats.length - lost
@@ -62,8 +63,8 @@ export function SelectionPanel({ onClose }: { onClose?: () => void }) {
           <strong>{formatMoney(selection.subtotal, currency)}</strong>
         </div>
         <p className="subtotal__note">* Taxes or additional fees, if any, calculated at checkout.</p>
-        <button className="button button--primary button--block" disabled={blocker !== null} onClick={() => void checkout()}>
-          {blocker ?? `Proceed to Checkout (${formatMoney(selection.subtotal, currency)}) →`}
+        <button className="button button--primary button--block" disabled={blocker !== null || checkingOut} onClick={() => void checkout().then(onClose)}>
+          {blocker ?? (checkingOut ? 'Placing order…' : `Proceed to Checkout (${formatMoney(selection.subtotal, currency)}) →`)}
         </button>
       </footer>
     </section>

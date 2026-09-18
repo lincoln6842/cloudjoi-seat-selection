@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { formatMoney } from '../lib/money'
 import { seatLabel } from '../seatmap/model'
-import { chooseSeatsAgain, load, seatStore } from '../state/actions'
+import { chooseSeatsAgain, closeOrder, load, seatStore } from '../state/actions'
 import { useSelection } from '../state/selection'
 import { useStore } from '../state/store'
 import { HoldTimer } from './HoldTimer'
@@ -149,6 +149,44 @@ export function ExpiredDialog({ onChooseAgain }: { onChooseAgain: () => void }) 
             Choose Seats Again →
           </button>
           <p className="expired__note">Tapping will clear the basket and return to the venue map.</p>
+        </div>
+      )}
+    </dialog>
+  )
+}
+
+export function ConfirmationDialog({ onDone }: { onDone: () => void }) {
+  const order = useStore(seatStore, (s) => s.order)
+  const venue = useStore(seatStore, (s) => s.venue)
+  const ref = useDialog(order !== null)
+  const done = () => {
+    closeOrder()
+    onDone()
+  }
+  const currency = venue?.seatmap.event.currency ?? 'MYR'
+  return (
+    <dialog ref={ref} className="sheet sheet--alert" onCancel={(e) => (e.preventDefault(), done())} aria-labelledby="order-title">
+      {order && (
+        <div className="expired">
+          <div className="banner banner--solid-success">
+            <strong id="order-title">Seats booked</strong>
+            <span>Order {order.id}</span>
+          </div>
+          <div className="expired__list order__list">
+            <strong>Purchased seats ({order.seats.length}):</strong>
+            <ul>
+              {order.seats.map((id) => (
+                <li key={id}>{venue ? seatLabel(venue, id) : id}</li>
+              ))}
+            </ul>
+            <strong>Total: {formatMoney(order.total, currency)}</strong>
+          </div>
+          <p>
+            A confirmation with order ID <strong>{order.id}</strong> has been sent to your email.
+          </p>
+          <button className="button button--primary button--block" onClick={done} autoFocus>
+            Done
+          </button>
         </div>
       )}
     </dialog>

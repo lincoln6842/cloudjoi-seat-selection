@@ -171,17 +171,24 @@ export async function removeSeat(seatId: string): Promise<void> {
 }
 
 export async function checkout(): Promise<void> {
+  if (get().checkingOut) return
   const seats = [...get().holds.keys()]
+  set({ checkingOut: true })
   try {
     const { data } = await api.POST('/events/{eventId}/checkout', eventPath)
     if (!data) throw new Error('Checkout rejected')
-    console.log('Checkout', { order: data.order_id, seats })
-    set({ holds: new Map(), expiresAt: null })
-    notify({ tone: 'info', title: 'Order created', body: `Order ${data.order_id} is waiting for payment (demo: payment is out of scope).` })
+    const venue = get().venue
+    const total = seats.reduce((sum, id) => sum + (venue?.byId.get(id)?.section.tier.price ?? 0), 0)
+    set({ holds: new Map(), expiresAt: null, checkingOut: false, order: { id: data.order_id, seats, total } })
   } catch {
+    set({ checkingOut: false })
     notify({ tone: 'danger', title: 'Checkout failed', body: 'Your seats changed. Please review them and try again.' })
     void refreshHolds()
   }
+}
+
+export function closeOrder(): void {
+  set({ order: null })
 }
 
 let warnedFor: number | null = null

@@ -12,6 +12,13 @@ export interface Notice {
   body: string
 }
 
+export interface Order {
+  id: string
+  /** Seat ids bought, in pick order. */
+  seats: readonly string[]
+  total: number
+}
+
 export interface SeatState {
   phase: 'loading' | 'ready' | 'error'
   /** Static venue layout, loaded once. */
@@ -27,6 +34,10 @@ export interface SeatState {
   maxSeats: number
   /** Seats released when the hold timer ran out; drives the "hold expired" screen. */
   expired: readonly string[] | null
+  /** Checkout request in flight; blocks a second submit. */
+  checkingOut: boolean
+  /** Last completed order; drives the confirmation screen. */
+  order: Order | null
   connection: Connection
   notices: readonly Notice[]
 }
@@ -40,6 +51,8 @@ export const initialState: SeatState = {
   expiresAt: null,
   maxSeats: 10,
   expired: null,
+  checkingOut: false,
+  order: null,
   connection: 'connecting',
   notices: [],
 }

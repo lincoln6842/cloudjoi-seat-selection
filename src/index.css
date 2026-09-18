@@ -804,6 +804,19 @@ button {
   text-transform: uppercase;
 }
 
+.banner--solid-success {
+  flex-direction: column;
+  gap: 4px;
+  background: var(--lime);
+  border: var(--border);
+  box-shadow: var(--shadow);
+}
+
+.banner--solid-success strong {
+  font-size: 17px;
+  text-transform: uppercase;
+}
+
 /* ------------------------------------------------------------ mobile chrome */
 
 .bottom-bar {
@@ -966,6 +979,16 @@ button {
   font-size: 12px;
   color: var(--muted);
   text-align: center;
+}
+
+.order__list {
+  color: var(--ink);
+  border-color: var(--ink);
+  background: var(--sheet);
+}
+
+.order__list li {
+  border-color: var(--ink);
 }
 
 /* ------------------------------------------------------------ notices */
