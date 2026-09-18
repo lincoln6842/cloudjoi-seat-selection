@@ -433,15 +433,18 @@ export class SeatMapRenderer {
         if (batch) batch.push(seat)
         else batches.set(fill, [seat])
       }
+      // Plain fillRects: at 8-28px rounded corners are invisible, and building
+      // thousands of arc paths per frame cost ~3x the whole frame budget.
+      // The 1px outline is an outline-coloured square with the fill inset.
+      const outline = size >= 8 ? 1 : 0
       for (const [fill, seats] of batches) {
-        ctx.beginPath()
-        for (const seat of seats) rectPath(ctx, this.sx(seat.x) - half, this.sy(seat.y) - half, size, size, radius)
+        if (outline) {
+          ctx.fillStyle = fill === colors.unavailable ? colors.unavailableStroke : colors.ink
+          for (const seat of seats) ctx.fillRect(this.sx(seat.x) - half, this.sy(seat.y) - half, size, size)
+        }
         ctx.fillStyle = fill
-        ctx.fill()
-        if (size >= 8) {
-          ctx.lineWidth = 1
-          ctx.strokeStyle = fill === colors.unavailable ? colors.unavailableStroke : colors.ink
-          ctx.stroke()
+        for (const seat of seats) {
+          ctx.fillRect(this.sx(seat.x) - half + outline, this.sy(seat.y) - half + outline, size - 2 * outline, size - 2 * outline)
         }
       }
       for (const seat of this.model.seats) {

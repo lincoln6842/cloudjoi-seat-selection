@@ -15,7 +15,7 @@ type Row = { label: string; seats: Seat[] }
 const SEAT = 26 // seat cell size in layout units
 const ROW_STEP = 30 // distance between rows (a little legroom)
 const AISLE = 2 * SEAT // aisle width between sections
-const TIER_GAP = 4 * ROW_STEP // room for section titles above curved rows
+const TIER_GAP = 5 * ROW_STEP // room for section titles above curved rows
 const CURVE = 0.0001 // rows bow away from the stage: y += CURVE * x^2
 const PAD = 10 // outline padding around seats
 
