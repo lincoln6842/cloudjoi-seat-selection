@@ -1,5 +1,7 @@
+import { networkInterfaces } from 'node:os'
 import react from '@vitejs/plugin-react'
 import { defineConfig, loadEnv } from 'vite'
+import { qrcode } from 'vite-plugin-qrcode'
 import { fakeApi } from './mock/plugin.ts'
 
 // Modes (see README):
@@ -12,6 +14,9 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       react(),
+      // With --host: a QR of the network URL to open on a phone. Wi-Fi/Ethernet
+      // only; a VPN tunnel address (utun*) isn't reachable from the phone.
+      qrcode({ filter: (url) => lanAddresses().includes(new URL(url).hostname) }),
       mode === 'development' &&
         fakeApi({
           reverbAppKey: env.VITE_REVERB_APP_KEY,
@@ -26,3 +31,9 @@ export default defineConfig(({ mode }) => {
     },
   }
 })
+
+function lanAddresses(): string[] {
+  return Object.entries(networkInterfaces())
+    .filter(([name]) => /^(en|eth|wl)/.test(name))
+    .flatMap(([, addresses]) => addresses?.map((a) => a.address) ?? [])
+}
