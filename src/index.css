@@ -233,7 +233,9 @@ button {
   position: absolute;
   background: var(--yellow);
   white-space: nowrap;
-  animation: goto-in 160ms ease-out;
+  animation:
+    goto-in 160ms ease-out,
+    goto-out 300ms ease-in 2.2s forwards; /* ends at GOTO_MS (SeatMap.tsx) */
 }
 
 .map__goto--left {
@@ -262,6 +264,12 @@ button {
 
 @keyframes goto-in {
   from {
+    opacity: 0;
+  }
+}
+
+@keyframes goto-out {
+  to {
     opacity: 0;
   }
 }

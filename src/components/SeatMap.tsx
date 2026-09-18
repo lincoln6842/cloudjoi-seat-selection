@@ -19,6 +19,7 @@ export interface SeatMapHandle {
 }
 
 const ARROWS = { left: '←', right: '→', top: '↑', bottom: '↓' }
+const GOTO_MS = 2500 // the go-to button's life if not tapped; its CSS fade-out ends then too
 
 export function SeatMap({ venue, ref }: { venue: VenueModel; ref?: Ref<SeatMapHandle> }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -45,6 +46,12 @@ export function SeatMap({ venue, ref }: { venue: VenueModel; ref?: Ref<SeatMapHa
 
   useEffect(() => renderer.current?.setInsets(insets), [insets])
 
+  useEffect(() => {
+    if (!edge) return
+    const timer = setTimeout(() => setEdge(null), GOTO_MS)
+    return () => clearTimeout(timer)
+  }, [edge])
+
   useImperativeHandle(ref, () => ({ showAll: () => renderer.current?.showAll() }), [])
 
   // Overlays placed against the edges of the map's free area (the go-to pill).
@@ -69,6 +76,7 @@ export function SeatMap({ venue, ref }: { venue: VenueModel; ref?: Ref<SeatMapHa
       )}
       {edge && (
         <button
+          key={`${edge.section.id}-${edge.side}`}
           className={`button button--small map__goto map__goto--${edge.side}`}
           onClick={() => renderer.current?.enterZone(edge.section)}
         >

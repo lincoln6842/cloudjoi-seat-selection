@@ -71,7 +71,7 @@ Details:
 
 - **Where you land.** With a mouse, on the whole section. On touch screens (`pointer: coarse`), on its front rows at finger size (32 px seats), since a fitted section on a phone gives ~12 px seats. Pinch out to see the whole section.
 - **The blur** is the other sections' seats drawn into a canvas at ¼ size and scaled back up, so the smoothing blurs them, at 45% opacity. `ctx.filter = 'blur()'` would be simpler but is missing in older Safari and blurs every draw call separately, which with thousands of seat rects is far too slow. Blurred seats get no hover and ignore taps.
-- **The edge button** appears once you drag 60 px past the edge, and goes away when you start another drag. It skips sold-out sections and prefers the section straight ahead over a diagonal one.
+- **The edge button** appears once you drag 60 px past the edge, and fades out after 2.5 s if not tapped, or when you start another drag. It skips sold-out sections and prefers the section straight ahead over a diagonal one.
 
 ## Key decisions and trade-offs
 
