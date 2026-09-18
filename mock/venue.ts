@@ -25,6 +25,11 @@ interface Session {
   expiresAt: number | null
 }
 
+/** The contract: expires_at is null when nothing is held, and a revoked seat isn't held. */
+function clearExpiryIfNothingHeld(session: Session): void {
+  if (![...session.holds.values()].includes('held')) session.expiresAt = null
+}
+
 export interface VenueOptions {
   /** Defaults to HOLD_TTL_MS; shortened in dev to demo expiry. */
   holdTtlMs?: number
@@ -112,7 +117,7 @@ export class FakeVenue {
     const current = session.holds.get(seatId)
     if (!current) return
     session.holds.delete(seatId)
-    if (session.holds.size === 0) session.expiresAt = null
+    clearExpiryIfNothingHeld(session)
     // A revoked seat belongs to the venue now; dismissing it changes nothing public.
     if (current === 'held') {
       this.unavailable.delete(seatId)
@@ -142,6 +147,7 @@ export class FakeVenue {
     if (candidates.length === 0) return null
     const { s, seat } = candidates[Math.floor(this.opts.random() * candidates.length)]
     s.holds.set(seat, 'revoked')
+    clearExpiryIfNothingHeld(s)
     this.commit([{ seat_id: seat, status: 'unavailable' }])
     return seat
   }

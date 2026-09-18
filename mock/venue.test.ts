@@ -88,6 +88,7 @@ describe('FakeVenue', () => {
     expect(venue.revoke(t)).toBe(seats[0])
     expect(broadcasts.at(-1)?.changes).toEqual([{ seat_id: seats[0], status: 'unavailable' }])
     expect(venue.holdSet(t).holds).toEqual([{ seat_id: seats[0], status: 'revoked' }])
+    expect(venue.holdSet(t).expires_at).toBeNull()
     expect(errorCode(() => venue.checkout(t))).toBe('HOLDS_INVALID')
 
     venue.release(t, seats[0])

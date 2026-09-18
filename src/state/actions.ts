@@ -230,7 +230,8 @@ export async function devRevokeSeat(): Promise<void> {
 function withoutHold(s: SeatState, seatId: string): Pick<SeatState, 'holds' | 'expiresAt'> {
   const holds = new Map(s.holds)
   holds.delete(seatId)
-  return { holds, expiresAt: holds.size === 0 ? null : s.expiresAt }
+  const live = [...holds.values()].some((status) => status !== 'revoked')
+  return { holds, expiresAt: live ? s.expiresAt : null }
 }
 
 function without(set: ReadonlySet<string>, id: string): Set<string> {
