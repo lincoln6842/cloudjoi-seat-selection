@@ -26,6 +26,8 @@ export default defineConfig(({ mode }) => {
           holdSeconds: Number(env.MOCK_HOLD_SECONDS) || undefined,
         }),
     ],
+    // Keep /*! */ comments (the author line in main.tsx) through minification.
+    build: { rolldownOptions: { output: { comments: { legal: true } } } },
     server: {
       proxy: mode === 'backend' ? { '/api': env.BACKEND_URL || 'http://localhost:8000' } : undefined,
     },

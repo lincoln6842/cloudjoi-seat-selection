@@ -221,6 +221,11 @@ function notify(notice: Omit<Notice, 'id'>, ttl = 6_000): void {
   setTimeout(() => dismissNotice(id), ttl)
 }
 
+/** Easter egg: the brand tapped five times. */
+export function showCredit(): void {
+  notify({ tone: 'info', title: 'Built by lincoln6842', body: 'github.com/lincoln6842' })
+}
+
 export function dismissNotice(id: number): void {
   set((s) => ({ notices: s.notices.filter((n) => n.id !== id) }))
 }

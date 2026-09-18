@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { formatMoney } from '../lib/money'
 import { seatLabel } from '../seatmap/model'
-import { chooseSeatsAgain, closeOrder, load, seatStore } from '../state/actions'
+import { chooseSeatsAgain, closeOrder, load, seatStore, showCredit } from '../state/actions'
 import { useSelection } from '../state/selection'
 import { useStore } from '../state/store'
 import { HoldTimer } from './HoldTimer'
@@ -16,13 +16,23 @@ const dateFormat = new Intl.DateTimeFormat('en-MY', {
   minute: '2-digit',
 })
 
+let taps = 0
+let lastTap = 0
+
+function tapBrand(): void {
+  const now = Date.now()
+  taps = now - lastTap < 500 ? taps + 1 : 1
+  lastTap = now
+  if (taps === 5) showCredit()
+}
+
 export function Header() {
   const event = useStore(seatStore, (s) => s.venue?.seatmap.event)
   const connection = useStore(seatStore, (s) => s.connection)
   return (
     <>
       <header className="header">
-        <span className="brand">CLOUDJOI</span>
+        <span className="brand" onClick={tapBrand}>CLOUDJOI</span>
         <div className="header__event">
           <h1>{event?.name ?? 'Seat selection'}</h1>
           {event && (
