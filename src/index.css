@@ -836,6 +836,7 @@ button {
 .bottom-bar__info span {
   font-size: 13px;
   color: var(--muted);
+  text-wrap: pretty;
 }
 
 .bottom-bar .button {
@@ -846,6 +847,7 @@ button {
 
 .bottom-bar__lost {
   color: var(--danger);
+  white-space: nowrap;
   font-style: normal;
   font-weight: 700;
 }
