@@ -206,11 +206,14 @@ button {
   -webkit-user-select: none;
 }
 
-.map__hint {
+.map__top {
   position: absolute;
   top: 10px;
   left: 50%;
-  transform: translateX(-50%);
+  translate: -50% 0; /* not transform: .button:active uses that */
+}
+
+.map__hint {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -224,6 +227,43 @@ button {
   text-transform: uppercase;
   white-space: nowrap;
   pointer-events: none;
+}
+
+.button.map__goto {
+  position: absolute;
+  background: var(--yellow);
+  white-space: nowrap;
+  animation: goto-in 160ms ease-out;
+}
+
+.map__goto--left {
+  left: calc(var(--inset-left) + 8px);
+  top: 50%;
+  translate: 0 -50%;
+}
+
+.map__goto--right {
+  right: calc(var(--inset-right) + 8px);
+  top: 50%;
+  translate: 0 -50%;
+}
+
+.map__goto--top {
+  top: calc(var(--inset-top) + 8px);
+  left: 50%;
+  translate: -50% 0;
+}
+
+.map__goto--bottom {
+  bottom: calc(var(--inset-bottom) + 8px);
+  left: 50%;
+  translate: -50% 0;
+}
+
+@keyframes goto-in {
+  from {
+    opacity: 0;
+  }
 }
 
 .map__zoom {

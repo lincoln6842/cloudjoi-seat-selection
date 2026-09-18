@@ -1,27 +1,30 @@
-import { useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react'
+import { useEffect, useImperativeHandle, useRef, useState, type CSSProperties, type Ref } from 'react'
 import { formatMoney } from '../lib/money'
-import type { SeatInfo, VenueModel } from '../seatmap/model'
-import { SeatMapRenderer } from '../seatmap/renderer'
+import type { SeatInfo, SectionInfo, VenueModel } from '../seatmap/model'
+import { SeatMapRenderer, type Edge } from '../seatmap/renderer'
 import { colors, tierColors } from '../seatmap/theme'
-import type { Insets, Lod } from '../seatmap/viewport'
+import type { Insets } from '../seatmap/viewport'
 import { DESKTOP, useMediaQuery } from '../hooks/useMediaQuery'
 import { devRevokeSeat, seatStore, toggleSeat } from '../state/actions'
 import { seatStatus } from '../state/seats'
 import { useStore } from '../state/store'
 
 // Space the overlays take, so "fit" keeps the venue clear of them (see .map__zoom/.legend CSS).
-const DESKTOP_INSETS: Insets = { top: 16, right: 16, bottom: 84, left: 76 }
+const DESKTOP_INSETS: Insets = { top: 60, right: 16, bottom: 84, left: 76 }
 const MOBILE_INSETS: Insets = { top: 56, right: 12, bottom: 176, left: 12 }
 
 /** What other UI (e.g. "Choose seats again") may ask of the map. */
 export interface SeatMapHandle {
-  fit(): void
+  showAll(): void
 }
+
+const ARROWS = { left: '←', right: '→', top: '↑', bottom: '↓' }
 
 export function SeatMap({ venue, ref }: { venue: VenueModel; ref?: Ref<SeatMapHandle> }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const renderer = useRef<SeatMapRenderer | null>(null)
-  const [lod, setLod] = useState<Lod>('overview')
+  const [zone, setZone] = useState<SectionInfo | null>(null)
+  const [edge, setEdge] = useState<Edge | null>(null)
   const [tip, setTip] = useState<{ seat: SeatInfo; x: number; y: number } | null>(null)
   const insets = useMediaQuery(DESKTOP) ? DESKTOP_INSETS : MOBILE_INSETS
   const initialInsets = useRef(insets)
@@ -30,7 +33,8 @@ export function SeatMap({ venue, ref }: { venue: VenueModel; ref?: Ref<SeatMapHa
     const instance = new SeatMapRenderer(canvasRef.current!, venue, seatStore, {
       onSeatClick: toggleSeat,
       onHover: (seat, x, y) => setTip(seat ? { seat, x, y } : null),
-      onLodChange: setLod,
+      onZoneChange: setZone,
+      onEdge: setEdge,
     }, initialInsets.current)
     renderer.current = instance
     return () => {
@@ -41,33 +45,50 @@ export function SeatMap({ venue, ref }: { venue: VenueModel; ref?: Ref<SeatMapHa
 
   useEffect(() => renderer.current?.setInsets(insets), [insets])
 
-  useImperativeHandle(ref, () => ({ fit: () => renderer.current?.fit() }), [])
+  useImperativeHandle(ref, () => ({ showAll: () => renderer.current?.showAll() }), [])
+
+  // Overlays placed against the edges of the map's free area (the go-to pill).
+  const insetVars = Object.fromEntries(Object.entries(insets).map(([side, px]) => [`--inset-${side}`, `${px}px`])) as CSSProperties
 
   return (
-    <div className="map">
+    <div className="map" style={insetVars}>
       <canvas
         ref={canvasRef}
         className="map__canvas"
         role="img"
         aria-label={`Seat map of ${venue.seatmap.event.venue}. Your selected seats are listed in the selection panel.`}
       />
-      {lod === 'overview' && (
-        <p className="map__hint">
+      {zone ? (
+        <button className="button button--small map__top" onClick={() => renderer.current?.showAll()}>
+          ← All sections
+        </button>
+      ) : (
+        <p className="map__hint map__top">
           <InfoIcon /> Tap a section block to zoom in &amp; pick seats
         </p>
       )}
-      <div className="map__zoom">
-        <button className="button button--square" onClick={() => renderer.current?.zoomIn()} aria-label="Zoom in">
-          +
+      {edge && (
+        <button
+          className={`button button--small map__goto map__goto--${edge.side}`}
+          onClick={() => renderer.current?.enterZone(edge.section)}
+        >
+          {edge.side === 'left' ? `← Go to ${edge.section.name}` : `Go to ${edge.section.name} ${ARROWS[edge.side]}`}
         </button>
-        <button className="button button--square" onClick={() => renderer.current?.zoomOut()} aria-label="Zoom out">
-          −
-        </button>
-        <button className="button button--square" onClick={() => renderer.current?.fit()} aria-label="Fit whole venue">
-          FIT
-        </button>
-      </div>
-      <Legend venue={venue} lod={lod} />
+      )}
+      {zone && (
+        <div className="map__zoom">
+          <button className="button button--square" onClick={() => renderer.current?.zoomIn()} aria-label="Zoom in">
+            +
+          </button>
+          <button className="button button--square" onClick={() => renderer.current?.zoomOut()} aria-label="Zoom out">
+            −
+          </button>
+          <button className="button button--square" onClick={() => renderer.current?.fit()} aria-label="Fit whole section">
+            FIT
+          </button>
+        </div>
+      )}
+      <Legend venue={venue} showStates={zone !== null} />
       {tip && <SeatTooltip {...tip} currency={venue.seatmap.event.currency} />}
       {import.meta.env.DEV && (
         <button className="map__dev" onClick={() => void devRevokeSeat()} title="Dev only: the fake venue revokes one of your seats">
@@ -78,7 +99,7 @@ export function SeatMap({ venue, ref }: { venue: VenueModel; ref?: Ref<SeatMapHa
   )
 }
 
-function Legend({ venue, lod }: { venue: VenueModel; lod: Lod }) {
+function Legend({ venue, showStates }: { venue: VenueModel; showStates: boolean }) {
   const currency = venue.seatmap.event.currency
   return (
     <div className="legend" aria-label="Legend">
@@ -90,7 +111,7 @@ function Legend({ venue, lod }: { venue: VenueModel; lod: Lod }) {
           </li>
         ))}
       </ul>
-      {lod !== 'overview' && (
+      {showStates && (
         <ul className="legend__states">
           <li>
             <span className="swatch" style={{ background: colors.selected }}>✓</span> Selected

@@ -18,6 +18,8 @@ export interface SectionInfo {
   shortName: string
   tier: Schemas['Tier']
   outline: Point[]
+  /** Bounding box of the outline. */
+  bounds: Schemas['Rect']
   seatIds: string[]
   /** Centre of the section's front row, where "tap a section" zooms to. */
   front: Point
@@ -57,6 +59,7 @@ export function buildModel(seatmap: Seatmap): VenueModel {
       shortName: s.short_name,
       tier,
       outline: s.outline.map(([x, y]) => [x, y] as Point),
+      bounds: { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) },
       seatIds: [],
       front: [(front[0].x + front[front.length - 1].x) / 2, front[0].y],
       centre: [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2],
@@ -104,6 +107,33 @@ export function seatAt(model: VenueModel, x: number, y: number): SeatInfo | null
 
 export function sectionAt(model: VenueModel, x: number, y: number): SectionInfo | null {
   return model.sections.find((s) => insidePolygon(s.outline, x, y)) ?? null
+}
+
+/**
+ * The nearest section lying roughly in direction (dx, dy) of `from`, among
+ * those `accept` allows. Straight ahead beats diagonal (score cos² / distance).
+ */
+export function sectionToward(
+  model: VenueModel,
+  from: SectionInfo,
+  dx: number,
+  dy: number,
+  accept: (s: SectionInfo) => boolean,
+): SectionInfo | null {
+  let best: SectionInfo | null = null
+  let bestScore = 0
+  const length = Math.hypot(dx, dy)
+  for (const s of model.sections) {
+    if (s === from || !accept(s)) continue
+    const vx = s.centre[0] - from.centre[0]
+    const vy = s.centre[1] - from.centre[1]
+    const distance = Math.hypot(vx, vy)
+    const cos = (vx * dx + vy * dy) / (distance * length)
+    if (cos < 0.5) continue // more than 60° off
+    const score = (cos * cos) / distance
+    if (score > bestScore) [best, bestScore] = [s, score]
+  }
+  return best
 }
 
 // Ray casting.

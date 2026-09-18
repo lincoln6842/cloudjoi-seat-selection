@@ -9,17 +9,15 @@ export interface Viewport {
 
 export type Lod = 'overview' | 'mid' | 'close'
 
-// Level of detail is keyed on how big a seat cell is on screen, not on raw
-// scale, so it holds for any seatmap's layout units.
-export const SEATS_FROM_PX = 7 // below this, draw section blocks
+// 'overview' is the all-sections level. Inside a section, detail is keyed on
+// how big a seat cell is on screen, not on raw scale, so it holds for any
+// seatmap's layout units.
 export const CLOSE_FROM_PX = 28 // from here, seats are finger-sized: numbers and marks
 export const CLOSE_TARGET_PX = 32 // zoom level used when jumping to close
 const MAX_CELL_PX = 64
 
-export function lodFor(scale: number, seatSize: number): Lod {
-  const cell = scale * seatSize
-  if (cell < SEATS_FROM_PX) return 'overview'
-  return cell < CLOSE_FROM_PX ? 'mid' : 'close'
+export function lodFor(scale: number, seatSize: number): Exclude<Lod, 'overview'> {
+  return scale * seatSize < CLOSE_FROM_PX ? 'mid' : 'close'
 }
 
 /** Screen space kept free for overlays (zoom buttons, legend, hints). */
@@ -32,7 +30,7 @@ export interface Insets {
 
 export const NO_INSETS: Insets = { top: 16, right: 16, bottom: 16, left: 16 }
 
-/** Whole venue inside the screen minus `insets`, centred in that area. */
+/** Whole rect inside the screen minus `insets`, centred in that area. */
 export function fitTo(bounds: Schemas['Rect'], width: number, height: number, insets: Insets = NO_INSETS): Viewport {
   const w = width - insets.left - insets.right
   const h = height - insets.top - insets.bottom
@@ -70,19 +68,28 @@ export function centreOn(scale: number, wx: number, wy: number, sx: number, sy: 
   return { scale, x: sx - wx * scale, y: sy - wy * scale }
 }
 
-/** Stops the venue from being dragged entirely off screen. */
-export function clampPan(vp: Viewport, bounds: Schemas['Rect'], width: number, height: number): Viewport {
-  const margin = 80
-  const left = bounds.x * vp.scale + vp.x
-  const right = (bounds.x + bounds.width) * vp.scale + vp.x
-  const top = bounds.y * vp.scale + vp.y
-  const bottom = (bounds.y + bounds.height) * vp.scale + vp.y
-  let { x, y } = vp
-  if (right < margin) x += margin - right
-  if (left > width - margin) x -= left - (width - margin)
-  if (bottom < margin) y += margin - bottom
-  if (top > height - margin) y -= top - (height - margin)
-  return { ...vp, x, y }
+/**
+ * Keeps `rect` covering the screen minus `insets` (plus `slack` px of what
+ * lies beyond it), or centred there when it is smaller. Also returns how far
+ * `vp` was past that, in px: positive x means dragged right, past the left edge.
+ */
+export function clampTo(
+  vp: Viewport,
+  rect: Schemas['Rect'],
+  width: number,
+  height: number,
+  insets: Insets,
+  slack = 0,
+): { vp: Viewport; over: [number, number] } {
+  const x = clampAxis(vp.x, rect.x, rect.x + rect.width, vp.scale, insets.left + slack, width - insets.right - slack)
+  const y = clampAxis(vp.y, rect.y, rect.y + rect.height, vp.scale, insets.top + slack, height - insets.bottom - slack)
+  return { vp: { scale: vp.scale, x, y }, over: [vp.x - x, vp.y - y] }
+}
+
+/** Screen offset keeping world span [a, b] across screen span [lo, hi]. */
+function clampAxis(offset: number, a: number, b: number, scale: number, lo: number, hi: number): number {
+  if ((b - a) * scale <= hi - lo) return (lo + hi) / 2 - ((a + b) / 2) * scale
+  return Math.min(lo - a * scale, Math.max(hi - b * scale, offset))
 }
 
 /**

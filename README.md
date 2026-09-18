@@ -19,7 +19,7 @@ Things to try:
 
 - **Two buyers:** open the page in two browsers (or a normal and a private window). Seats one holds turn grey in the other within a second; they share one fake backend.
 - **Your phone:** `npm run dev -- --host`, then open the printed network URL. Same shared state.
-- **A seat taken from you:** click *Dev: revoke one of my seats* (top right of the map, dev builds only). The venue revokes one of your holds and the lost-seat flow runs. The fake venue also does this on its own now and then.
+- **A seat taken from you:** click *Dev: revoke one of my seats* (top right of the map, dev builds only). The venue revokes one of your holds and the lost-seat flow runs. `MOCK_REVOKE=on npm run dev` makes the fake venue also do this on its own, about every two minutes.
 - **Hold expiry without waiting 5 minutes:** `MOCK_HOLD_SECONDS=30 npm run dev`.
 - **A quiet venue:** `MOCK_BOTS=off npm run dev` stops the simulated buyers. `MOCK_LATENCY=0` removes the artificial response delay (default up to 250 ms, so the pending state is visible).
 
@@ -56,7 +56,22 @@ The browser code is identical in all three modes; only where `/api` and the sock
 
 - **State lives in one store** (`state/actions.ts`); every change goes through an action. The map and the sidebar never talk to each other: clicking a seat calls `toggleSeat`, the ✕ in the sidebar calls `removeSeat`, and both views re-read the store. A third panel tomorrow (say, "seats near you") would read the same store through `useSelection()` and need nothing else.
 - **React never renders seats.** The renderer subscribes to the store directly and redraws the canvas at most once per frame. React only renders the chrome (panel, legend, tooltip, dialogs), so a click re-renders a few small components, not 4,592 seats.
-- **Pure logic is separate and tested:** `state/seats.ts` (snapshot/delta, merging server hold sets with in-flight holds, clock-skew-corrected expiry), `seatmap/model.ts` (spatial-hash hit testing), `seatmap/viewport.ts` (pan/zoom math), `mock/venue.ts` (the fake backend's concurrency rules).
+- **Pure logic is separate and tested:** `state/seats.ts` (snapshot/delta, merging server hold sets with in-flight holds, clock-skew-corrected expiry), `seatmap/model.ts` (spatial-hash hit testing, finding the neighbouring section), `seatmap/viewport.ts` (pan/zoom math, keeping a section in view), `mock/venue.ts` (the fake backend's concurrency rules).
+
+## Two levels: all sections, then one section
+
+The map has two levels, the same on desktop and mobile:
+
+1. **All sections.** The venue fitted to the screen as 9 section blocks with live "N left" / "Only N left" / "SOLD OUT" chips. No pan or zoom; the only thing to do is pick a section. Sold-out sections can't be entered.
+2. **One section.** Tapping a block flies into that section. Its seats are sharp and clickable; every other section stays on the map, **faded and blurred**, like the unexplored part of an open-world map, so you keep your bearings without being able to misclick a seat you didn't mean to look at. You can zoom in to seat numbers, and out to 60% of the fitted section to see the surroundings. Panning is held to the section: drag past its edge and it stretches a little (rubber band) and springs back, and a **"Go to ‹section› →"** button appears on that side, naming the nearest open section in that direction. "← All sections" returns to level 1.
+
+Why: at 4,600 seats, the whole venue at once gives desktop users specks and phone users nothing tappable. Choosing a section first (price and availability at a glance) and then a seat splits one hard decision into two easy ones, and it caps what's drawn sharp to one section.
+
+Details:
+
+- **Where you land.** With a mouse, on the whole section. On touch screens (`pointer: coarse`), on its front rows at finger size (32 px seats), since a fitted section on a phone gives ~12 px seats. Pinch out to see the whole section.
+- **The blur** is the other sections' seats drawn into a canvas at ¼ size and scaled back up, so the smoothing blurs them, at 45% opacity. `ctx.filter = 'blur()'` would be simpler but is missing in older Safari and blurs every draw call separately, which with thousands of seat rects is far too slow. Blurred seats get no hover and ignore taps.
+- **The edge button** appears once you drag 60 px past the edge, and goes away when you start another drag. It skips sold-out sections and prefers the section straight ahead over a diagonal one.
 
 ## Key decisions and trade-offs
 
@@ -73,12 +88,12 @@ What makes it fast, measured in headless Chrome on an M3 Pro while zooming conti
 | | Median frame | p95 frame |
 |---|---|---|
 | Whole venue visible (4,592 seats), first version with rounded paths | 50 ms | 54 ms |
-| Whole venue visible, current (batched `fillRect`s) | 16.7 ms | 16.7 ms |
+| Whole venue visible, batched `fillRect`s (current drawing) | 16.7 ms | 16.7 ms |
 | Close zoom | 16.7 ms | 16.8 ms |
 
-Same numbers at 2× device pixel ratio. The techniques:
+Same numbers at 2× device pixel ratio. These were measured before the two-level map, when desktop showed every seat at once; that is still the worst case (a section zoomed out, with most of the venue drawn around it, blurred), but I haven't re-measured it. The techniques:
 
-- **Level of detail by on-screen seat size.** Under 7 px a seat is a speck, so the map draws 9 section blocks with live "N left" / "Only N left" / "SOLD OUT" chips. From 7 px, every seat, batched into one pass per colour. From 28 px, the full design (shadow, number, ✓ / ✕ / ⊘ marks, row labels), but only for the ~100 seats on screen.
+- **Level of detail.** Level 1 draws 9 section blocks, not seats. Inside a section, detail is keyed on on-screen seat size: below 28 px, seats are plain squares batched into one pass per colour; from 28 px, the full design (shadow, number, ✓ / ✕ / ⊘ marks, row labels), but only for the ~100 seats on screen. Seats of other sections are always the cheap squares, drawn at ¼ size for the blur.
 - **Culling:** seats outside the viewport are skipped. That is canvas's version of virtualization.
 - **Canvas sized to the viewport, not the venue, with DPR capped at 2.** A 3× phone screen would cost 2.25× the pixels for no visible difference, and iOS limits total canvas memory.
 - **Hit testing:** a spatial hash, so a click checks ~9 cells rather than 4,592 seats. The whole seat cell (32 px at close zoom) is the tap target, bigger than the 28 px drawn seat.
@@ -90,7 +105,7 @@ Not measured: real old phones and CPU-throttled devices. That's the first thing 
 
 ### No virtualization
 
-List virtualization doesn't map onto a 2D, zoomable seatmap. Viewport culling plus level of detail does the same job, and the whole venue stays visible at once on desktop, which buyers expect.
+List virtualization doesn't map onto a 2D, zoomable seatmap. Viewport culling plus level of detail does the same job, and the rest of the venue stays visible (blurred) around the section you're in.
 
 ### A tiny store instead of a state library
 
@@ -103,7 +118,7 @@ The brief has selection as purely local, with other buyers "reserving" seats. I 
 - Otherwise two people can pick the same seat, and one finds out at payment. A hold makes the server the referee: of any number of concurrent requests for a seat, exactly one wins, and the rest get `409 SEAT_UNAVAILABLE`, shown as a "Seat just taken" notice.
 - It is what makes a second browser *see* your selection.
 - All holds in an order share **one expiry**, 5 minutes from the first seat. Adding seats doesn't extend it (otherwise add/remove would hold seats forever). There is a countdown in the panel and a warning at 1 minute; on expiry, a "Hold expired" sheet lists what was released.
-- Consequence: the brief's "a seat you selected becomes unavailable externally" can no longer happen through someone else clicking it. It happens when **the venue revokes a hold** (or it expires). A revoked seat turns red with ✕ on the map, stays in the panel struck through as "LOST: Released by venue" with a banner and a notice, and checkout is blocked with that reason until it's removed. That's the dev button and the fake venue's occasional revocation.
+- Consequence: the brief's "a seat you selected becomes unavailable externally" can no longer happen through someone else clicking it. It happens when **the venue revokes a hold** (or it expires). A revoked seat turns red with ✕ on the map, stays in the panel struck through as "LOST: Released by venue" with a banner and a notice, and checkout is blocked with that reason until it's removed. That's the dev button, and `MOCK_REVOKE=on` for occasional automatic revocation.
 - Also: optimistic UI (the seat shows as pending immediately), a 10-seat limit, and repeated clicks on a pending seat are ignored, so fast clicking can't reorder hold/release requests.
 - Closing the tab does **not** release holds early. A last-second beacon is unreliable on phones and would lose your seats on a reload. The session token lives in `localStorage`, so a reload restores your selection; abandoned holds cost other buyers up to 5 minutes.
 
@@ -125,14 +140,14 @@ The dev backend (`mock/`) is a Vite plugin implementing that contract over **rea
 
 ### Mobile first
 
-- **Phones and tablets** (below 1024 px, where tablets get the mobile layout centred with side margins) open on section blocks. Tapping a block animates straight to close zoom at its front rows, because a fitted section on a phone gives ~12 px seats, too small for fingers. At mid zoom, a touch tap zooms in rather than selects; a mouse click selects.
+- **Phones and tablets** (below 1024 px, where tablets get the mobile layout centred with side margins) get the same two levels as desktop, landing on a section's front rows at finger size (see above). Zoomed out inside a section, a touch tap zooms in rather than selects; a mouse click selects.
 - **Selection** is a bottom bar (timer, count, subtotal, "Review Order") plus a native `<dialog>` sheet with the same `SelectionPanel` the desktop sidebar uses. Using `<dialog>` gives focus trapping, Esc and the backdrop for free.
-- **Desktop** opens with every seat visible and shows a hover tooltip (section, row, seat, price, status).
+- **Desktop** shows a hover tooltip (section, row, seat, price, status), and a pointer cursor over enterable section blocks.
 
 ### Other notes
 
 - **Money** is integer minor units (sen) end to end; fees are out of scope, so the panel shows a subtotal with "fees calculated at checkout". Tier colours live in the frontend theme, not the API.
-- **Design:** mockups and the designer's handoff are in `docs/design/`. I deviated in a few places: level of detail is keyed on on-screen seat size, which is what the design's 0.45 / 1.2 scale thresholds describe for our layout units; seats at mid zoom are square rather than rounded (the rounding is invisible at that size and was the main per-frame cost); and the legend adapts to the zoom level.
+- **Design:** mockups and the designer's handoff are in `docs/design/`. I deviated in a few places: the design's overview → seats zoom threshold became the two explicit levels; the seats → close threshold is keyed on on-screen seat size, which is what the design's 1.2 scale threshold describes for our layout units; desktop (mockups 09 and 12) opens on section blocks rather than every seat; seats at mid zoom are square rather than rounded (the rounding is invisible at that size and was the main per-frame cost); and the legend adapts to the zoom level.
 
 ## What I cut
 

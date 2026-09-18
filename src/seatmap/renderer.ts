@@ -2,11 +2,11 @@ import { formatMoney } from '../lib/money'
 import type { SeatState, SeatStatus } from '../state/seats'
 import { seatStatus } from '../state/seats'
 import type { Store } from '../state/store'
-import { seatAt, sectionAt, type SeatInfo, type SectionInfo, type VenueModel } from './model'
+import { seatAt, sectionAt, sectionToward, type SeatInfo, type SectionInfo, type VenueModel } from './model'
 import { colors, FADE_MS, fallbackTierColor, fonts, LOW_STOCK, SEAT_FILL, tierColors } from './theme'
 import {
   CLOSE_TARGET_PX,
-  clampPan,
+  clampTo,
   centreOn,
   fitTo,
   lerpViewport,
@@ -23,12 +23,25 @@ export interface RendererCallbacks {
   onSeatClick(seatId: string): void
   /** Mouse hover over a seat (null when leaving one), in canvas CSS pixels. */
   onHover(seat: SeatInfo | null, x: number, y: number): void
-  onLodChange(lod: Lod): void
+  /** Entered a section (level 2), or back to all sections (null). */
+  onZoneChange(zone: SectionInfo | null): void
+  /** Dragging against the section's edge towards another section, or null once not. */
+  onEdge(edge: Edge | null): void
+}
+
+export interface Edge {
+  section: SectionInfo
+  side: 'left' | 'right' | 'top' | 'bottom'
 }
 
 const MAX_DPR = 2 // 3x phone screens cost 2.25x the pixels for no visible gain
 const DRAG_THRESHOLD = 6
 const ANIMATION_MS = 350
+const ZONE_SLACK = 24 // px of the neighbouring sections allowed in view past the section's edge
+const EDGE_PUSH_PX = 60 // drag this far past the edge to be offered the next section
+const BLUR_DOWNSCALE = 4 // other sections render at 1/4 size, then scale up soft
+const OUTSIDE_ALPHA = 0.45
+const ZONE_MIN_ZOOM = 0.6 // zoom out past the fitted section, to see the blurred venue around it
 
 /**
  * Draws the seat map on one <canvas> and handles pan/zoom/tap. Framework
@@ -42,8 +55,10 @@ export class SeatMapRenderer {
   private dpr = 1
   private vp: Viewport = { scale: 1, x: 0, y: 0 }
   private fitVp: Viewport = { scale: 1, x: 0, y: 0 }
-  private userMoved = false
-  private lod: Lod | null = null
+  /** The section being shown (level 2); null shows all sections (level 1). */
+  private zone: SectionInfo | null = null
+  private edge: Edge | null = null
+  private lod: Lod = 'overview'
   private frame = 0
   private animation: { from: Viewport; to: Viewport; start: number } | null = null
   private hovered: SeatInfo | null = null
@@ -54,6 +69,9 @@ export class SeatMapRenderer {
   private gesture: { start: Viewport; x: number; y: number; distance: number; moved: boolean } | null = null
   private readonly cleanup: (() => void)[] = []
   private readonly reducedMotion = matchMedia('(prefers-reduced-motion: reduce)')
+  private readonly coarsePointer = matchMedia('(pointer: coarse)')
+  private readonly blur = document.createElement('canvas')
+  private readonly blurCtx: CanvasRenderingContext2D
   private readonly canvas: HTMLCanvasElement
   private readonly model: VenueModel
   private readonly store: Store<SeatState>
@@ -69,6 +87,9 @@ export class SeatMapRenderer {
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('Canvas 2D is not available')
     this.ctx = ctx
+    const blurCtx = this.blur.getContext('2d')
+    if (!blurCtx) throw new Error('Canvas 2D is not available')
+    this.blurCtx = blurCtx
     this.previousUnavailable = store.get().unavailable
     this.countSectionsLeft()
 
@@ -105,8 +126,27 @@ export class SeatMapRenderer {
     this.resize()
   }
 
+  /** Back to the whole section (level 2), or the whole venue (level 1). */
   fit(): void {
-    this.userMoved = false
+    this.animateTo(this.zone ? this.zoneFit(this.zone) : this.fitVp)
+  }
+
+  /** Level 2: zoom into one section; other sections blur out. */
+  enterZone(section: SectionInfo): void {
+    this.zone = section
+    this.setEdge(null)
+    this.callbacks.onZoneChange(section)
+    const fit = this.zoneFit(section)
+    // A fitted section on a phone gives ~12 px seats: land on its front rows at finger size instead.
+    const scale = Math.max(fit.scale, CLOSE_TARGET_PX / this.model.seatmap.seat_size)
+    this.animateTo(this.coarsePointer.matches ? centreOn(scale, ...section.front, this.width / 2, this.height * 0.3) : fit)
+  }
+
+  /** Level 1: every section as a block. */
+  showAll(): void {
+    this.zone = null
+    this.setEdge(null)
+    this.callbacks.onZoneChange(null)
     this.animateTo(this.fitVp)
   }
 
@@ -131,28 +171,62 @@ export class SeatMapRenderer {
     this.canvas.width = Math.round(rect.width * this.dpr)
     this.canvas.height = Math.round(rect.height * this.dpr)
     this.fitVp = fitTo(this.model.seatmap.bounds, this.width, this.height, this.insets)
-    this.setViewport(this.userMoved ? this.vp : this.fitVp)
+    this.setViewport(this.zone ? this.vp : this.fitVp)
+  }
+
+  private zoneFit(zone: SectionInfo): Viewport {
+    return fitTo(zone.bounds, this.width, this.height, this.insets)
   }
 
   private limits() {
-    return scaleLimits(this.fitVp, this.model.seatmap.seat_size)
+    const limits = scaleLimits(this.zone ? this.zoneFit(this.zone) : this.fitVp, this.model.seatmap.seat_size)
+    return this.zone ? { ...limits, min: limits.min * ZONE_MIN_ZOOM } : limits
   }
 
-  private setViewport(vp: Viewport): void {
-    this.updateViewport(vp)
+  /** Keeps a section in view. `elastic` (a drag) stretches a little past its edge and offers the next section. */
+  private clamp(vp: Viewport, elastic = false): Viewport {
+    if (!this.zone) return vp
+    const held = clampTo(vp, this.zone.bounds, this.width, this.height, this.insets, ZONE_SLACK)
+    if (!elastic) return held.vp
+    const [ox, oy] = held.over
+    this.pushEdge(ox, oy)
+    const rubber = (o: number) => Math.sign(o) * Math.min(80, Math.abs(o) * 0.35)
+    return { ...held.vp, x: held.vp.x + rubber(ox), y: held.vp.y + rubber(oy) }
+  }
+
+  private pushEdge(ox: number, oy: number): void {
+    if (Math.hypot(ox, oy) < EDGE_PUSH_PX) {
+      if (ox === 0 && oy === 0) this.setEdge(null)
+      return
+    }
+    // Dragged right (ox > 0) means looking left.
+    const section = sectionToward(this.model, this.zone!, -ox, -oy, (s) => this.isOpen(s))
+    const side = Math.abs(ox) > Math.abs(oy) ? (ox > 0 ? 'left' : 'right') : oy > 0 ? 'top' : 'bottom'
+    this.setEdge(section && { section, side })
+  }
+
+  private setEdge(edge: Edge | null): void {
+    if (edge?.section === this.edge?.section && edge?.side === this.edge?.side) return
+    this.edge = edge
+    this.callbacks.onEdge(edge)
+  }
+
+  private isOpen(section: SectionInfo): boolean {
+    return (this.sectionLeft.get(section.id) ?? 0) > 0
+  }
+
+  private setViewport(vp: Viewport, elastic = false): void {
+    this.updateViewport(this.clamp(vp, elastic))
     this.invalidate()
   }
 
   private updateViewport(vp: Viewport): void {
-    this.vp = clampPan(vp, this.model.seatmap.bounds, this.width, this.height)
-    const lod = lodFor(this.vp.scale, this.model.seatmap.seat_size)
-    if (lod !== this.lod) {
-      this.lod = lod
-      this.callbacks.onLodChange(lod)
-    }
+    this.vp = vp
+    this.lod = this.zone ? lodFor(vp.scale, this.model.seatmap.seat_size) : 'overview'
   }
 
   private animateTo(target: Viewport): void {
+    target = this.clamp(target)
     if (this.reducedMotion.matches) return this.setViewport(target)
     this.animation = { from: this.vp, to: target, start: performance.now() }
     this.invalidate()
@@ -195,6 +269,7 @@ export class SeatMapRenderer {
     const [x, y] = this.point(e)
     this.pointers.set(e.pointerId, { x, y })
     this.animation = null
+    this.setEdge(null)
     this.gesture = { start: this.vp, ...this.centroid(), moved: this.pointers.size > 1 }
   }
 
@@ -210,12 +285,12 @@ export class SeatMapRenderer {
     const c = this.centroid()
     if (!g.moved && Math.hypot(c.x - g.x, c.y - g.y) < DRAG_THRESHOLD) return
     g.moved = true
-    this.userMoved = true
+    if (!this.zone) return // level 1 doesn't pan or zoom
     this.hover(-1, -1)
     // Pinch scales around the fingers' midpoint; one pointer just pans.
     const factor = g.distance > 0 && c.distance > 0 ? c.distance / g.distance : 1
     const zoomed = zoomAt(g.start, factor, g.x, g.y, this.limits())
-    this.setViewport({ ...zoomed, x: zoomed.x + c.x - g.x, y: zoomed.y + c.y - g.y })
+    this.setViewport({ ...zoomed, x: zoomed.x + c.x - g.x, y: zoomed.y + c.y - g.y }, true)
   }
 
   private onPointerUp(e: PointerEvent): void {
@@ -224,6 +299,9 @@ export class SeatMapRenderer {
     this.pointers.delete(e.pointerId)
     // Remaining finger of a pinch carries on panning from here.
     this.gesture = this.pointers.size > 0 ? { start: this.vp, ...this.centroid(), moved: true } : null
+    // Let go past the edge: spring back.
+    const held = this.clamp(this.vp)
+    if (!this.gesture && (held.x !== this.vp.x || held.y !== this.vp.y)) this.animateTo(held)
     if (wasTap && e.type === 'pointerup') this.tap(...this.point(e), e.pointerType)
   }
 
@@ -233,8 +311,8 @@ export class SeatMapRenderer {
 
   private onWheel(e: WheelEvent): void {
     e.preventDefault()
+    if (!this.zone) return
     this.animation = null
-    this.userMoved = true
     const [x, y] = this.point(e)
     // Trackpad pinch arrives as ctrl+wheel with small deltas.
     const factor = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015))
@@ -251,7 +329,13 @@ export class SeatMapRenderer {
   }
 
   private hover(x: number, y: number): void {
-    const seat = this.lod === 'overview' || x < 0 ? null : seatAt(this.model, ...toWorld(this.vp, x, y))
+    if (!this.zone) {
+      const section = x < 0 ? null : sectionAt(this.model, ...toWorld(this.vp, x, y))
+      this.canvas.style.cursor = section && this.isOpen(section) ? 'pointer' : ''
+      return
+    }
+    const found = x < 0 ? null : seatAt(this.model, ...toWorld(this.vp, x, y))
+    const seat = found?.section === this.zone ? found : null
     if (seat !== this.hovered) {
       this.hovered = seat
       this.canvas.style.cursor = seat && this.isClickable(seat) ? 'pointer' : ''
@@ -266,25 +350,17 @@ export class SeatMapRenderer {
 
   private tap(x: number, y: number, pointerType: string): void {
     const [wx, wy] = toWorld(this.vp, x, y)
-    const closeScale = CLOSE_TARGET_PX / this.model.seatmap.seat_size
-    if (this.lod === 'overview') {
+    if (!this.zone) {
       const section = sectionAt(this.model, wx, wy)
-      if (section && (this.sectionLeft.get(section.id) ?? 0) > 0) this.zoomToSection(section)
+      if (section && this.isOpen(section)) this.enterZone(section)
       return
     }
     // Mid-zoom seats are too small for fingers: zoom in on the spot instead.
     if (this.lod === 'mid' && pointerType !== 'mouse') {
-      this.userMoved = true
-      return this.animateTo(centreOn(closeScale, wx, wy, x, y))
+      return this.animateTo(centreOn(CLOSE_TARGET_PX / this.model.seatmap.seat_size, wx, wy, x, y))
     }
     const seat = seatAt(this.model, wx, wy)
-    if (seat) this.callbacks.onSeatClick(seat.id)
-  }
-
-  private zoomToSection(section: SectionInfo): void {
-    this.userMoved = true
-    const scale = CLOSE_TARGET_PX / this.model.seatmap.seat_size
-    this.animateTo(centreOn(scale, section.front[0], section.front[1], this.width / 2, this.height * 0.3))
+    if (seat?.section === this.zone) this.callbacks.onSeatClick(seat.id)
   }
 
   // ------------------------------------------------------------- drawing
@@ -302,8 +378,8 @@ export class SeatMapRenderer {
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
     ctx.clearRect(0, 0, this.width, this.height)
     this.drawStage()
-    if (this.lod === 'overview') this.drawSectionBlocks()
-    else this.drawSeats(now)
+    if (this.zone) this.drawSeats(this.zone, now)
+    else this.drawSectionBlocks()
 
     for (const [id, start] of this.fades) if (now - start > FADE_MS) this.fades.delete(id)
     if (this.animation || this.fades.size > 0) this.invalidate()
@@ -405,53 +481,31 @@ export class SeatMapRenderer {
     ctx.fillText(chip, cx, chipY + chipH / 2)
   }
 
-  private drawSeats(now: number): void {
+  private drawSeats(zone: SectionInfo, now: number): void {
     const { ctx } = this
     const state = this.store.get()
     const cell = this.model.seatmap.seat_size * this.vp.scale
     const close = this.lod === 'close'
     const size = cell * SEAT_FILL
-    const half = size / 2
     const radius = size * (close ? 0.22 : 0.18)
-    const margin = cell
-    const visible = (seat: SeatInfo) => {
+    const inside: SeatInfo[] = []
+    const outside: SeatInfo[] = []
+    for (const seat of this.model.seats) {
       const x = this.sx(seat.x)
       const y = this.sy(seat.y)
-      return x > -margin && x < this.width + margin && y > -margin && y < this.height + margin
+      if (x > -cell && x < this.width + cell && y > -cell && y < this.height + cell) {
+        ;(seat.section === zone ? inside : outside).push(seat)
+      }
     }
 
-    this.drawSectionTitles(close)
+    this.drawBlurred(outside, size, now)
 
-    // Mid zoom: thousands of seats. Batch one path per fill colour so the
-    // whole map is a handful of draw calls.
     if (!close) {
-      const batches = new Map<string, SeatInfo[]>()
-      for (const seat of this.model.seats) {
-        if (!visible(seat)) continue
-        const fill = this.fillFor(seat, seatStatus(state, seat.id), now)
-        const batch = batches.get(fill)
-        if (batch) batch.push(seat)
-        else batches.set(fill, [seat])
-      }
-      // Plain fillRects: at 8-28px rounded corners are invisible, and building
-      // thousands of arc paths per frame cost ~3x the whole frame budget.
-      // The 1px outline is an outline-coloured square with the fill inset.
-      const outline = size >= 8 ? 1 : 0
-      for (const [fill, seats] of batches) {
-        if (outline) {
-          ctx.fillStyle = fill === colors.unavailable ? colors.unavailableStroke : colors.ink
-          for (const seat of seats) ctx.fillRect(this.sx(seat.x) - half, this.sy(seat.y) - half, size, size)
-        }
-        ctx.fillStyle = fill
-        for (const seat of seats) {
-          ctx.fillRect(this.sx(seat.x) - half + outline, this.sy(seat.y) - half + outline, size - 2 * outline, size - 2 * outline)
-        }
-      }
-      for (const seat of this.model.seats) {
+      this.drawSectionTitle(zone)
+      this.fillSeats(ctx, inside, size, now, size >= 8 ? 1 : 0)
+      for (const seat of inside) {
         const status = seatStatus(state, seat.id)
-        if ((status === 'selected' || status === 'lost' || seat === this.hovered) && visible(seat)) {
-          this.drawSeatMark(seat, status, size)
-        }
+        if (status === 'selected' || status === 'lost' || seat === this.hovered) this.drawSeatMark(seat, status, size)
       }
       return
     }
@@ -459,8 +513,7 @@ export class SeatMapRenderer {
     // Close zoom: only ~100 seats on screen, so draw each in full detail.
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    for (const seat of this.model.seats) {
-      if (!visible(seat)) continue
+    for (const seat of inside) {
       const status = seatStatus(state, seat.id)
       const hovered = seat === this.hovered && status !== 'unavailable'
       const s = hovered ? size * 1.08 : size
@@ -482,7 +535,58 @@ export class SeatMapRenderer {
       ctx.setLineDash([])
       this.drawSeatMark(seat, status, s)
     }
-    this.drawRowLabels(size, radius)
+    this.drawRowLabels(zone, size, radius)
+  }
+
+  /**
+   * Mid-zoom style seats: one pass per fill colour, so thousands of seats are
+   * a handful of draw calls. Plain fillRects: at 8-28px rounded corners are
+   * invisible, and building thousands of arc paths per frame cost ~3x the
+   * whole frame budget. The outline is an outline-coloured square with the fill inset.
+   */
+  private fillSeats(ctx: CanvasRenderingContext2D, seats: SeatInfo[], size: number, now: number, outline: number): void {
+    const state = this.store.get()
+    const half = size / 2
+    const batches = new Map<string, SeatInfo[]>()
+    for (const seat of seats) {
+      const fill = this.fillFor(seat, seatStatus(state, seat.id), now)
+      const batch = batches.get(fill)
+      if (batch) batch.push(seat)
+      else batches.set(fill, [seat])
+    }
+    for (const [fill, batch] of batches) {
+      if (outline) {
+        ctx.fillStyle = fill === colors.unavailable ? colors.unavailableStroke : colors.ink
+        for (const seat of batch) ctx.fillRect(this.sx(seat.x) - half, this.sy(seat.y) - half, size, size)
+      }
+      ctx.fillStyle = fill
+      for (const seat of batch) {
+        ctx.fillRect(this.sx(seat.x) - half + outline, this.sy(seat.y) - half + outline, size - 2 * outline, size - 2 * outline)
+      }
+    }
+  }
+
+  /**
+   * Seats outside the section, drawn at 1/4 size and scaled back up: the
+   * smoothing blurs them, cheaply and in every browser (ctx.filter isn't).
+   */
+  private drawBlurred(seats: SeatInfo[], size: number, now: number): void {
+    const w = Math.ceil(this.width / BLUR_DOWNSCALE)
+    const h = Math.ceil(this.height / BLUR_DOWNSCALE)
+    if (this.blur.width !== w || this.blur.height !== h) {
+      this.blur.width = w
+      this.blur.height = h
+    }
+    const b = this.blurCtx
+    b.setTransform(1 / BLUR_DOWNSCALE, 0, 0, 1 / BLUR_DOWNSCALE, 0, 0)
+    b.clearRect(0, 0, this.width, this.height)
+    this.fillSeats(b, seats, size, now, 0)
+    const { ctx } = this
+    ctx.save()
+    ctx.globalAlpha = OUTSIDE_ALPHA
+    ctx.imageSmoothingQuality = 'high'
+    ctx.drawImage(this.blur, 0, 0, w * BLUR_DOWNSCALE, h * BLUR_DOWNSCALE)
+    ctx.restore()
   }
 
   private fillFor(seat: SeatInfo, status: SeatStatus, now: number): string {
@@ -539,39 +643,34 @@ export class SeatMapRenderer {
     }
   }
 
-  private drawSectionTitles(close: boolean): void {
-    if (close) return
+  private drawSectionTitle(section: SectionInfo): void {
     const { ctx } = this
     const currency = this.model.seatmap.event.currency
     ctx.textAlign = 'center'
     ctx.textBaseline = 'bottom'
     ctx.font = `700 11px ${fonts.sans}`
-    for (const section of this.model.sections) {
-      const soldOut = (this.sectionLeft.get(section.id) ?? 0) === 0
-      ctx.fillStyle = soldOut ? colors.soldOutText : colors.ink
-      const text = `${section.shortName.toUpperCase()} • ${formatMoney(section.tier.price, currency, true)}${soldOut ? ' (SOLD OUT)' : ''}`
-      ctx.fillText(text, this.sx(section.titleAt[0]), this.sy(section.titleAt[1]))
-    }
+    const soldOut = !this.isOpen(section)
+    ctx.fillStyle = soldOut ? colors.soldOutText : colors.ink
+    const text = `${section.shortName.toUpperCase()} • ${formatMoney(section.tier.price, currency, true)}${soldOut ? ' (SOLD OUT)' : ''}`
+    ctx.fillText(text, this.sx(section.titleAt[0]), this.sy(section.titleAt[1]))
   }
 
-  private drawRowLabels(size: number, radius: number): void {
+  private drawRowLabels(section: SectionInfo, size: number, radius: number): void {
     const { ctx } = this
     ctx.font = `700 ${size * 0.4}px ${fonts.sans}`
-    for (const section of this.model.sections) {
-      for (const row of section.rows) {
-        const x = this.sx(row.first.x) - size * 1.25
-        const y = this.sy(row.first.y)
-        if (x < -size || x > this.width + size || y < -size || y > this.height + size) continue
-        const holdsHere = [...this.store.get().holds.keys()].some((id) => {
-          const seat = this.model.byId.get(id)
-          return seat?.section === section && seat.row === row.label
-        })
-        ctx.fillStyle = holdsHere ? colors.selected : colors.ink
-        roundedRect(ctx, x - size * 0.4, y - size * 0.4, size * 0.8, size * 0.8, radius * 0.8)
-        ctx.fill()
-        ctx.fillStyle = holdsHere ? colors.ink : colors.paper
-        ctx.fillText(row.label, x, y + 1)
-      }
+    for (const row of section.rows) {
+      const x = this.sx(row.first.x) - size * 1.25
+      const y = this.sy(row.first.y)
+      if (x < -size || x > this.width + size || y < -size || y > this.height + size) continue
+      const holdsHere = [...this.store.get().holds.keys()].some((id) => {
+        const seat = this.model.byId.get(id)
+        return seat?.section === section && seat.row === row.label
+      })
+      ctx.fillStyle = holdsHere ? colors.selected : colors.ink
+      roundedRect(ctx, x - size * 0.4, y - size * 0.4, size * 0.8, size * 0.8, radius * 0.8)
+      ctx.fill()
+      ctx.fillStyle = holdsHere ? colors.ink : colors.paper
+      ctx.fillText(row.label, x, y + 1)
     }
   }
 }

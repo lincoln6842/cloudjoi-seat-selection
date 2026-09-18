@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { buildModel, seatAt, sectionAt, type Seatmap } from './model'
-import { clampPan, fitTo, lerpViewport, lodFor, toWorld, zoomAt } from './viewport'
+import { buildModel, seatAt, sectionAt, sectionToward, type Seatmap } from './model'
+import { clampTo, fitTo, lerpViewport, lodFor, toWorld, zoomAt } from './viewport'
 
 // Two sections side by side, 2 rows x 3 seats each, 10-unit cells.
 const seatmap: Seatmap = {
@@ -47,8 +47,19 @@ describe('seat hit testing', () => {
     expect(sectionAt(model, 45, 20)).toBeNull()
   })
 
-  it('records the front row centre of each section', () => {
+  it('records the front row centre and bounds of each section', () => {
     expect(model.sections[0].front).toEqual([15, 15])
+    expect(model.sections[1].bounds).toEqual({ x: 50, y: 10, width: 40, height: 20 })
+  })
+
+  it('finds the open section in a direction', () => {
+    const [a, b] = model.sections
+    const open = () => true
+    expect(sectionToward(model, a, 1, 0, open)).toBe(b)
+    expect(sectionToward(model, a, 1, 0.3, open)).toBe(b)
+    expect(sectionToward(model, a, -1, 0, open)).toBeNull()
+    expect(sectionToward(model, a, 0, 1, open)).toBeNull()
+    expect(sectionToward(model, a, 1, 0, (s) => s !== b)).toBeNull()
   })
 })
 
@@ -67,14 +78,25 @@ describe('viewport', () => {
   })
 
   it('picks detail level from on-screen seat size', () => {
-    expect(lodFor(0.5, 10)).toBe('overview')
     expect(lodFor(1, 10)).toBe('mid')
     expect(lodFor(3, 10)).toBe('close')
   })
 
-  it('keeps the venue from being dragged off screen', () => {
-    const lost = clampPan({ scale: 1, x: -1000, y: 0 }, seatmap.bounds, 200, 100)
-    expect(lost.x).toBeGreaterThan(-1000)
+  it('keeps a section covering the screen, and measures the push past its edge', () => {
+    const section = model.sections[1].bounds // x 50-90, y 10-30
+    const none = { top: 0, right: 0, bottom: 0, left: 0 }
+    // At scale 10 the section is 400 x 200 px on a 200 x 100 screen.
+    const ok = { scale: 10, x: -600, y: -150 }
+    expect(clampTo(ok, section, 200, 100, none)).toEqual({ vp: ok, over: [0, 0] })
+    // Dragged 50px right of its left edge: held there, 50px over.
+    const pushed = clampTo({ scale: 10, x: -450, y: -150 }, section, 200, 100, none)
+    expect(pushed.vp.x).toBe(-500)
+    expect(pushed.over).toEqual([50, 0])
+    // Slack lets that much of the neighbours in.
+    expect(clampTo({ scale: 10, x: -450, y: -150 }, section, 200, 100, none, 20).over).toEqual([30, 0])
+    // Smaller than the screen on an axis: centred on it.
+    const small = clampTo({ scale: 2, x: 0, y: 0 }, section, 200, 100, none)
+    expect(toWorld(small.vp, 100, 50)).toEqual([70, 20])
   })
 
   it('tweens from start to end', () => {

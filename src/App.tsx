@@ -33,7 +33,7 @@ export default function App() {
         <LoadState />
       )}
       {!desktop && <BottomSheet open={sheetOpen} onClose={() => setSheetOpen(false)} />}
-      <ExpiredDialog onChooseAgain={() => map.current?.fit()} />
+      <ExpiredDialog onChooseAgain={() => map.current?.showAll()} />
     </div>
   )
 }
