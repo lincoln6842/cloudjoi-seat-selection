@@ -5,6 +5,7 @@ import type { Store } from '../state/store'
 import { seatAt, sectionAt, sectionToward, type SeatInfo, type SectionInfo, type VenueModel } from './model'
 import { colors, FADE_MS, fallbackTierColor, fonts, LOW_STOCK, SEAT_FILL, tierColors } from './theme'
 import {
+  CLOSE_FROM_PX,
   CLOSE_TARGET_PX,
   clampTo,
   centreOn,
@@ -139,7 +140,7 @@ export class SeatMapRenderer {
 
   /** Back to the whole section (level 2), or the whole venue (level 1). */
   fit(): void {
-    this.animateTo(this.zone ? this.zoneFit(this.zone) : this.fitVp)
+    this.animateTo(this.zone ? this.zoneLanding(this.zone) : this.fitVp)
   }
 
   /** Level 2: zoom into one section; other sections blur out. */
@@ -149,10 +150,16 @@ export class SeatMapRenderer {
     this.zone = section
     this.setEdge(null)
     this.callbacks.onZoneChange(section)
+    this.animateTo(this.zoneLanding(section))
+  }
+
+  /** Where entering (or fitting) a section lands. */
+  private zoneLanding(section: SectionInfo): Viewport {
     const fit = this.zoneFit(section)
+    if (!this.coarsePointer.matches) return fit
     // A fitted section on a phone gives ~12 px seats: land on its front rows at finger size instead.
     const scale = Math.max(fit.scale, CLOSE_TARGET_PX / this.model.seatmap.seat_size)
-    this.animateTo(this.coarsePointer.matches ? centreOn(scale, ...section.front, this.width / 2, this.height * 0.3) : fit)
+    return centreOn(scale, ...section.front, this.width / 2, this.height * 0.3)
   }
 
   /** Level 1: every section as a block. */
@@ -193,7 +200,10 @@ export class SeatMapRenderer {
 
   private limits() {
     const limits = scaleLimits(this.zone ? this.zoneFit(this.zone) : this.fitVp, this.model.seatmap.seat_size)
-    return this.zone ? { ...limits, min: limits.min * ZONE_MIN_ZOOM } : limits
+    if (!this.zone) return limits
+    // Touch: never zoom out of close detail (row labels, seat numbers) or past the section.
+    if (this.coarsePointer.matches) return { ...limits, min: Math.max(limits.min, CLOSE_FROM_PX / this.model.seatmap.seat_size) }
+    return { ...limits, min: limits.min * ZONE_MIN_ZOOM }
   }
 
   /** Keeps a section in view. `elastic` (a drag) stretches a little past its edge and offers the next section. */
@@ -680,8 +690,12 @@ export class SeatMapRenderer {
     const { ctx } = this
     ctx.font = `700 ${size * 0.4}px ${fonts.sans}`
     for (const row of section.rows) {
-      const x = this.sx(row.first.x) - size * 1.25
-      const y = this.sy(row.first.y)
+      // Pinned to the left edge while the row's start is scrolled off, level with
+      // the first seat still on screen (rows curve); leaves with the row.
+      const pin = this.insets.left + size * 0.4
+      const beside = row.seats.find((seat) => this.sx(seat.x) - size * 1.25 >= pin) ?? row.seats[row.seats.length - 1]
+      const x = Math.min(Math.max(this.sx(row.seats[0].x) - size * 1.25, pin), this.sx(beside.x))
+      const y = this.sy(beside.y)
       if (x < -size || x > this.width + size || y < -size || y > this.height + size) continue
       const holdsHere = [...this.store.get().holds.keys()].some((id) => {
         const seat = this.model.byId.get(id)

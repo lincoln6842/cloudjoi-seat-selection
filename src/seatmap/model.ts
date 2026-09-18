@@ -29,8 +29,8 @@ export interface SectionInfo {
   labelHeight: number
   /** Just above the front row at the section's centre: where its title goes at mid zoom. */
   titleAt: Point
-  /** First and last seat of each row, for row labels. */
-  rows: { label: string; first: SeatInfo; last: SeatInfo }[]
+  /** Seats of each row, left to right, for row labels. */
+  rows: { label: string; seats: SeatInfo[] }[]
 }
 
 export interface VenueModel {
@@ -75,7 +75,7 @@ export function buildModel(seatmap: Seatmap): VenueModel {
       const rowSeats = row.seats.map((seat) => ({ ...seat, row: row.label, section }))
       seats.push(...rowSeats)
       section.seatIds.push(...rowSeats.map((seat) => seat.id))
-      if (rowSeats.length > 0) section.rows.push({ label: row.label, first: rowSeats[0], last: rowSeats[rowSeats.length - 1] })
+      if (rowSeats.length > 0) section.rows.push({ label: row.label, seats: rowSeats })
     }
     section.titleAt = [section.centre[0], Math.min(...front.map((seat) => seat.y)) - seatmap.seat_size * 0.9]
     sections.push(section)
