@@ -17,7 +17,7 @@ npm run dev          # http://localhost:5173, fake API + fake Reverb included
 
 Things to try:
 
-- **Two buyers:** open the page in two browsers (or a normal and a private window). Seats one holds turn grey in the other within a second; they share one fake backend.
+- **Two buyers:** open the page in two tabs; each tab is its own buyer. Seats one holds turn grey in the other within a second; they share one fake backend.
 - **Your phone:** `npm run dev -- --host`, then open the printed network URL. Same shared state.
 - **A seat taken from you:** click *Dev: revoke one of my seats* (top right of the map, dev builds only). The venue revokes one of your holds and the lost-seat flow runs. `MOCK_REVOKE=on npm run dev` makes the fake venue also do this on its own, about every two minutes.
 - **Hold expiry without waiting 5 minutes:** `MOCK_HOLD_SECONDS=30 npm run dev`.
@@ -120,7 +120,7 @@ The brief has selection as purely local, with other buyers "reserving" seats. I 
 - All holds in an order share **one expiry**, 5 minutes from the first seat. Adding seats doesn't extend it (otherwise add/remove would hold seats forever). There is a countdown in the panel and a warning at 1 minute; on expiry, a "Hold expired" sheet lists what was released.
 - Consequence: the brief's "a seat you selected becomes unavailable externally" can no longer happen through someone else clicking it. It happens when **the venue revokes a hold** (or it expires). A revoked seat turns red with ✕ on the map, stays in the panel struck through as "LOST: Released by venue" with a banner and a notice, and checkout is blocked with that reason until it's removed. That's the dev button, and `MOCK_REVOKE=on` for occasional automatic revocation.
 - Also: optimistic UI (the seat shows as pending immediately), a 10-seat limit, and repeated clicks on a pending seat are ignored, so fast clicking can't reorder hold/release requests.
-- Closing the tab does **not** release holds early. A last-second beacon is unreliable on phones and would lose your seats on a reload. The session token lives in `localStorage`, so a reload restores your selection; abandoned holds cost other buyers up to 5 minutes.
+- Closing the tab does **not** release holds early. A last-second beacon is unreliable on phones and would lose your seats on a reload. The session token lives in `sessionStorage`, so a reload restores your selection while each tab stays a separate buyer; abandoned holds cost other buyers up to 5 minutes.
 
 ### Real-time updates: the WebSocket is already in
 
@@ -176,3 +176,4 @@ The contract assumes the backend will:
 - broadcast **after** the transaction commits, with `seq` increasing by exactly 1 per event;
 - run a scheduled sweep that releases expired holds **and broadcasts it**, since expiry marked only in the database would leave every viewer's map stale;
 - keep enough change history for `?since=`, falling back to a snapshot.
+- stop one person from sidestepping the 10-seat limit: it is per session, and anonymous sessions are free, so another tab or a script gets another 10 (and can re-hold seats the moment they expire). Rate-limit `POST /sessions` and holds per IP, add a short cooldown before a released seat can be re-held by the same client, and tie checkout to an account or a captcha.

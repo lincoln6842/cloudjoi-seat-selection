@@ -113,6 +113,9 @@ async function sessionLost(): Promise<void> {
 
 /** Map click: select, deselect, or dismiss, depending on the seat's state. */
 export function toggleSeat(seatId: string): void {
+  // The order is being placed from the current holds; changing them now would
+  // make the confirmation disagree with what the server sold.
+  if (get().checkingOut) return
   const status = seatStatus(get(), seatId)
   if (status === 'available') void holdSeat(seatId)
   else if (status === 'selected' || status === 'lost') void removeSeat(seatId)
@@ -154,17 +157,20 @@ function limitReached(): void {
 /** Sidebar remove, map deselect, or dismissing a lost seat. */
 export async function removeSeat(seatId: string): Promise<void> {
   const previous = get().holds.get(seatId)
-  if (!previous || previous === 'pending') return
+  if (!previous || previous === 'pending' || get().checkingOut) return
   // Optimistic: the seat frees up on screen straight away.
   set((s) => ({
     ...withoutHold(s, seatId),
     unavailable: previous === 'held' ? without(s.unavailable, seatId) : s.unavailable,
   }))
   try {
-    const { data } = await api.DELETE('/events/{eventId}/holds/{seatId}', {
+    const { data, response } = await api.DELETE('/events/{eventId}/holds/{seatId}', {
       params: { path: { eventId: EVENT_ID, seatId } },
     })
     if (data) set((s) => applyHoldSet(s, data, Date.now()))
+    else if (response.status === 401) await sessionLost()
+    // Rejected: the optimistic removal may be wrong, so take the server's view.
+    else void catchUp()
   } catch {
     void catchUp()
   }

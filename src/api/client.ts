@@ -11,15 +11,16 @@ export const api = createClient<paths>({
   baseUrl: `${import.meta.env.VITE_API_BASE_URL ?? ''}/api`,
 })
 
-// The anonymous session token lives in localStorage so a reload keeps
-// the user's holds. Storage can be unavailable (private mode): then the
-// session only lasts for this page load.
+// The anonymous session token lives in sessionStorage: a reload keeps the
+// user's holds, while every tab is its own buyer (sharing one token across
+// tabs left each tab blind to the other's holds). Storage can be unavailable:
+// then the session only lasts for this page load.
 const TOKEN_KEY = 'cloudjoi.session'
 let token: string | null = readToken()
 
 function readToken(): string | null {
   try {
-    return localStorage.getItem(TOKEN_KEY)
+    return sessionStorage.getItem(TOKEN_KEY)
   } catch {
     return null
   }
@@ -49,7 +50,7 @@ async function startSession(): Promise<void> {
   if (error || !data) throw new Error('Could not start a session.')
   token = data.token
   try {
-    localStorage.setItem(TOKEN_KEY, token)
+    sessionStorage.setItem(TOKEN_KEY, token)
   } catch {
     // Session still works for this page load.
   }
